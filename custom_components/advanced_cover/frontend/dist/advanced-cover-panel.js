@@ -182,6 +182,7 @@ async function loadHaPanelElements() {
         "ha-tab-group-tab",
         "ha-card",
         "ha-icon",
+        "ha-selector",
         "ha-switch",
     ];
     await Promise.all(tags.map((tag) => customElements.whenDefined(tag).catch(() => undefined)));
@@ -516,17 +517,46 @@ const sharedStyles = i$3 `
   select {
     font: inherit;
     color: var(--primary-text-color);
-    background: var(--card-background-color);
-    border: 1px solid var(--divider-color);
+    background: var(
+      --input-fill-color,
+      var(--secondary-background-color, rgba(127, 127, 127, 0.12))
+    );
+    border: 1px solid var(--input-idle-line-color, var(--divider-color));
     border-radius: 8px;
     padding: 8px 10px;
     box-sizing: border-box;
     width: 100%;
+    transition:
+      background-color 0.15s ease,
+      border-color 0.15s ease,
+      box-shadow 0.15s ease;
+  }
+  input[type="text"]:hover,
+  input[type="time"]:hover,
+  input[type="number"]:hover,
+  select:hover {
+    border-color: var(--input-hover-line-color, var(--primary-color));
   }
   input:focus-visible,
   select:focus-visible {
     outline: 2px solid var(--primary-color);
     outline-offset: 1px;
+  }
+  ha-selector {
+    display: block;
+    width: 100%;
+    --mdc-text-field-fill-color: var(
+      --input-fill-color,
+      var(--secondary-background-color, rgba(127, 127, 127, 0.12))
+    );
+    --mdc-text-field-idle-line-color: var(
+      --input-idle-line-color,
+      var(--divider-color)
+    );
+    --mdc-text-field-hover-line-color: var(
+      --input-hover-line-color,
+      var(--primary-color)
+    );
   }
   input[type="range"] {
     width: 100%;
@@ -1159,23 +1189,34 @@ const compassStyles = i$3 `
   }
 `;
 
-/** Entity IDs of the given domains, favorites first. */
-function entityIdsForDomains(hass, domains, favorites = []) {
-    const all = Object.keys(hass.states)
-        .filter((eid) => !domains || domains.includes(eid.split(".", 1)[0]))
-        .sort((a, b) => a.localeCompare(b));
-    if (!favorites.length)
-        return all;
-    const favSet = new Set(favorites);
-    return [...favorites.filter((f) => all.includes(f)), ...all.filter((e) => !favSet.has(e))];
+/** Build the native Home Assistant entity selector configuration. */
+function entitySelectorConfig(domains) {
+    return {
+        ...(domains ? { filter: [{ domain: domains }] } : {}),
+        multiple: false,
+    };
 }
-/** One shared `<datalist>` per form (by stable `listId`). */
-function renderEntityDatalist(hass, listId, domains, favorites = []) {
-    const ids = entityIdsForDomains(hass, domains, favorites);
+/** Render Home Assistant's native searchable entity picker. */
+function renderEntitySelector(hass, value, onValue, domains) {
     return b `
-    <datalist id=${listId}>
-      ${ids.map((id) => b `<option value=${id}></option>`)}
-    </datalist>
+    <ha-selector
+      .hass=${hass}
+      .selector=${{ entity: entitySelectorConfig(domains) }}
+      .value=${value}
+      @value-changed=${(event) => onValue(event.detail.value ?? "")}
+    ></ha-selector>
+  `;
+}
+/** Render Home Assistant's native searchable area picker. */
+function renderAreaSelector(hass, value, onValue) {
+    const config = { multiple: false };
+    return b `
+    <ha-selector
+      .hass=${hass}
+      .selector=${{ area: config }}
+      .value=${value}
+      @value-changed=${(event) => onValue(event.detail.value ?? "")}
+    ></ha-selector>
   `;
 }
 
@@ -2198,7 +2239,6 @@ class ViewCovers extends i {
         const draft = this._draft;
         if (!draft)
             return A;
-        const areas = Object.values(this.hass.areas ?? {});
         const caps = this._draftCaps;
         const isAwning = draft.kind === "awning";
         return b `
@@ -2221,16 +2261,6 @@ class ViewCovers extends i {
           </div>
           <div class="dialog-scroll">
             ${this._error ? b `<p class="error">${this._error}</p>` : A}
-
-            ${renderEntityDatalist(this.hass, "ac-covers-list", ["cover"])}
-            ${renderEntityDatalist(this.hass, "ac-contacts-list", [
-            "binary_sensor",
-            "sensor",
-        ])}
-            ${renderEntityDatalist(this.hass, "ac-scripts-list", ["script"])}
-            <datalist id="ac-areas-list">
-              ${areas.map((a) => b `<option value=${a.area_id}>${a.name}</option>`)}
-            </datalist>
 
             <div class="row">
               <div class="grow">
@@ -2263,17 +2293,10 @@ class ViewCovers extends i {
                 <label class="field-label"
                   >${t(this.hass, "config_panel.covers_field_entity")}</label
                 >
-                <input
-                  type="text"
-                  list="ac-covers-list"
-                  .value=${draft.cover_entity_id}
-                  spellcheck="false"
-                  autocomplete="off"
-                  @input=${(e) => this._patchDraft({
-            cover_entity_id: e.target.value,
-        })}
-                  @change=${() => this._probe()}
-                />
+                ${renderEntitySelector(this.hass, draft.cover_entity_id, (value) => {
+            this._patchDraft({ cover_entity_id: value });
+            void this._probe();
+        }, ["cover"])}
               </div>
             </div>
             ${caps
@@ -2308,14 +2331,7 @@ class ViewCovers extends i {
                 <label class="field-label"
                   >${t(this.hass, "config_panel.covers_field_area")}</label
                 >
-                <input
-                  type="text"
-                  list="ac-areas-list"
-                  .value=${draft.area_id ?? ""}
-                  @input=${(e) => this._patchDraft({
-            area_id: e.target.value || null,
-        })}
-                />
+                ${renderAreaSelector(this.hass, draft.area_id ?? "", (value) => this._patchDraft({ area_id: value || null }))}
               </div>
               <div class="grow">
                 <label class="field-label"
@@ -2346,31 +2362,13 @@ class ViewCovers extends i {
                 <label class="field-label"
                   >${t(this.hass, "config_panel.covers_field_low_entity")}</label
                 >
-                <input
-                  type="text"
-                  list="ac-covers-list"
-                  .value=${draft.low_mode_entity_id ?? ""}
-                  spellcheck="false"
-                  autocomplete="off"
-                  @input=${(e) => this._patchDraft({
-            low_mode_entity_id: e.target.value || null,
-        })}
-                />
+                ${renderEntitySelector(this.hass, draft.low_mode_entity_id ?? "", (value) => this._patchDraft({ low_mode_entity_id: value || null }), ["cover"])}
               </div>
               <div class="grow">
                 <label class="field-label"
                   >${t(this.hass, "config_panel.covers_field_low_script")}</label
                 >
-                <input
-                  type="text"
-                  list="ac-scripts-list"
-                  .value=${draft.low_mode_script_id ?? ""}
-                  spellcheck="false"
-                  autocomplete="off"
-                  @input=${(e) => this._patchDraft({
-            low_mode_script_id: e.target.value || null,
-        })}
-                />
+                ${renderEntitySelector(this.hass, draft.low_mode_script_id ?? "", (value) => this._patchDraft({ low_mode_script_id: value || null }), ["script"])}
               </div>
             </div>
             ${draft.low_mode_entity_id || draft.low_mode_script_id
@@ -2404,17 +2402,10 @@ class ViewCovers extends i {
                       <label class="field-label"
                         >${t(this.hass, "config_panel.covers_field_contact")}</label
                       >
-                      <input
-                        type="text"
-                        list="ac-contacts-list"
-                        .value=${draft.contact_entity_id ?? ""}
-                        spellcheck="false"
-                        autocomplete="off"
-                        @input=${(e) => this._patchDraft({
-                contact_entity_id: e.target.value || null,
-            })}
-                        @change=${() => this._probe()}
-                      />
+                      ${renderEntitySelector(this.hass, draft.contact_entity_id ?? "", (value) => {
+                this._patchDraft({ contact_entity_id: value || null });
+                void this._probe();
+            }, ["binary_sensor", "sensor"])}
                     </div>
                   </div>
                   ${draft.contact_entity_id
@@ -2870,7 +2861,7 @@ function remove(opts, index) {
 }
 function renderStateChips(opts, index, cond) {
     const states = cond.states ?? [];
-    const listId = `${opts.entityListId}-states-${index}`;
+    const listId = `ac-condition-states-${index}`;
     const suggestions = knownStates(opts.hass, cond.entity_id);
     const addState = (input) => {
         const value = input.value.trim();
@@ -2918,17 +2909,7 @@ function renderCondition(opts, cond, index) {
         case "entity_state_not":
             body = b `
         <span>${t(hass, "config_panel.cond_only_if")}</span>
-        <input
-          type="text"
-          class="cond-entity"
-          list=${opts.entityListId}
-          .value=${cond.entity_id ?? ""}
-          spellcheck="false"
-          autocomplete="off"
-          @input=${(e) => update(opts, index, {
-                entity_id: e.target.value,
-            })}
-        />
+        ${renderEntitySelector(hass, cond.entity_id ?? "", (value) => update(opts, index, { entity_id: value }))}
         <span>
           ${cond.type === "entity_state"
                 ? t(hass, "config_panel.cond_is_one_of")
@@ -3005,17 +2986,7 @@ function renderCondition(opts, cond, index) {
         case "numeric_state":
             body = b `
         <span>${t(hass, "config_panel.cond_only_if")}</span>
-        <input
-          type="text"
-          class="cond-entity"
-          list=${opts.entityListId}
-          .value=${cond.entity_id ?? ""}
-          spellcheck="false"
-          autocomplete="off"
-          @input=${(e) => update(opts, index, {
-                entity_id: e.target.value,
-            })}
-        />
+        ${renderEntitySelector(hass, cond.entity_id ?? "", (value) => update(opts, index, { entity_id: value }))}
         <span>${t(hass, "config_panel.cond_numeric_above")}</span>
         <input
           type="number"
@@ -4738,7 +4709,6 @@ class ViewScenarios extends i {
             hass: this.hass,
             conditions: assignment.extra_conditions,
             onChange: (conds) => this._patchAssignment(index, { extra_conditions: conds }),
-            entityListId: "ac-all-entities",
             contactAvailable: Boolean(cover?.contact_entity_id),
             coverAzimuth: cover ? cover.azimuth : undefined,
         })}
@@ -5002,8 +4972,6 @@ class ViewScenarios extends i {
                 ${w}
               </p>`)}
 
-            ${renderEntityDatalist(this.hass, "ac-all-entities", null, this.snapshot.config.favorite_entity_ids)}
-
             <div class="row">
               <div class="grow">
                 <label class="field-label"
@@ -5030,7 +4998,6 @@ class ViewScenarios extends i {
             hass: this.hass,
             conditions: draft.conditions,
             onChange: (conds) => this._patch({ conditions: conds }),
-            entityListId: "ac-all-entities",
             contactAvailable: draft.assignments.some((a) => Boolean(this.snapshot.covers.find((c) => c.id === a.cover_item_id)
                 ?.contact_entity_id)),
         })}

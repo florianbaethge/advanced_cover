@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { renderEntitySelector } from "./entity-input";
 import { t } from "./i18n";
 import type { Condition, ConditionType, HomeAssistant } from "./types";
 
@@ -8,8 +9,6 @@ export interface ConditionEditorOptions {
   hass: HomeAssistant;
   conditions: Condition[];
   onChange: (conditions: Condition[]) => void;
-  /** Datalist id (rendered by the host once) with all entity ids. */
-  entityListId: string;
   /** Whether the contact condition type is offered (cover has a contact). */
   contactAvailable: boolean;
   /**
@@ -80,7 +79,7 @@ function renderStateChips(
   cond: Condition
 ): TemplateResult {
   const states = cond.states ?? [];
-  const listId = `${opts.entityListId}-states-${index}`;
+  const listId = `ac-condition-states-${index}`;
   const suggestions = knownStates(opts.hass, cond.entity_id);
   const addState = (input: HTMLInputElement): void => {
     const value = input.value.trim();
@@ -135,18 +134,9 @@ function renderCondition(
     case "entity_state_not":
       body = html`
         <span>${t(hass, "config_panel.cond_only_if")}</span>
-        <input
-          type="text"
-          class="cond-entity"
-          list=${opts.entityListId}
-          .value=${cond.entity_id ?? ""}
-          spellcheck="false"
-          autocomplete="off"
-          @input=${(e: Event) =>
-            update(opts, index, {
-              entity_id: (e.target as HTMLInputElement).value,
-            })}
-        />
+        ${renderEntitySelector(hass, cond.entity_id ?? "", (value) =>
+          update(opts, index, { entity_id: value })
+        )}
         <span>
           ${cond.type === "entity_state"
             ? t(hass, "config_panel.cond_is_one_of")
@@ -227,18 +217,9 @@ function renderCondition(
     case "numeric_state":
       body = html`
         <span>${t(hass, "config_panel.cond_only_if")}</span>
-        <input
-          type="text"
-          class="cond-entity"
-          list=${opts.entityListId}
-          .value=${cond.entity_id ?? ""}
-          spellcheck="false"
-          autocomplete="off"
-          @input=${(e: Event) =>
-            update(opts, index, {
-              entity_id: (e.target as HTMLInputElement).value,
-            })}
-        />
+        ${renderEntitySelector(hass, cond.entity_id ?? "", (value) =>
+          update(opts, index, { entity_id: value })
+        )}
         <span>${t(hass, "config_panel.cond_numeric_above")}</span>
         <input
           type="number"

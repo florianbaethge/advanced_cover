@@ -8,7 +8,6 @@ import {
   runScenario,
   saveScenario,
 } from "../data/api";
-import { renderEntityDatalist } from "../entity-input";
 import {
   defineCustomElementOnce,
   formatApiError,
@@ -1582,7 +1581,6 @@ export class ViewScenarios extends LitElement {
             conditions: assignment.extra_conditions,
             onChange: (conds) =>
               this._patchAssignment(index, { extra_conditions: conds }),
-            entityListId: "ac-all-entities",
             contactAvailable: Boolean(cover?.contact_entity_id),
             coverAzimuth: cover ? cover.azimuth : undefined,
           })}
@@ -1850,13 +1848,6 @@ export class ViewScenarios extends LitElement {
               </p>`
             )}
 
-            ${renderEntityDatalist(
-              this.hass,
-              "ac-all-entities",
-              null,
-              this.snapshot.config.favorite_entity_ids
-            )}
-
             <div class="row">
               <div class="grow">
                 <label class="field-label"
@@ -1884,7 +1875,6 @@ export class ViewScenarios extends LitElement {
               hass: this.hass,
               conditions: draft.conditions,
               onChange: (conds) => this._patch({ conditions: conds }),
-              entityListId: "ac-all-entities",
               contactAvailable: draft.assignments.some((a) =>
                 Boolean(
                   this.snapshot.covers.find((c) => c.id === a.cover_item_id)

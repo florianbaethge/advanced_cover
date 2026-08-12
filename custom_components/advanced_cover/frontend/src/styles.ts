@@ -294,17 +294,46 @@ export const sharedStyles = css`
   select {
     font: inherit;
     color: var(--primary-text-color);
-    background: var(--card-background-color);
-    border: 1px solid var(--divider-color);
+    background: var(
+      --input-fill-color,
+      var(--secondary-background-color, rgba(127, 127, 127, 0.12))
+    );
+    border: 1px solid var(--input-idle-line-color, var(--divider-color));
     border-radius: 8px;
     padding: 8px 10px;
     box-sizing: border-box;
     width: 100%;
+    transition:
+      background-color 0.15s ease,
+      border-color 0.15s ease,
+      box-shadow 0.15s ease;
+  }
+  input[type="text"]:hover,
+  input[type="time"]:hover,
+  input[type="number"]:hover,
+  select:hover {
+    border-color: var(--input-hover-line-color, var(--primary-color));
   }
   input:focus-visible,
   select:focus-visible {
     outline: 2px solid var(--primary-color);
     outline-offset: 1px;
+  }
+  ha-selector {
+    display: block;
+    width: 100%;
+    --mdc-text-field-fill-color: var(
+      --input-fill-color,
+      var(--secondary-background-color, rgba(127, 127, 127, 0.12))
+    );
+    --mdc-text-field-idle-line-color: var(
+      --input-idle-line-color,
+      var(--divider-color)
+    );
+    --mdc-text-field-hover-line-color: var(
+      --input-hover-line-color,
+      var(--primary-color)
+    );
   }
   input[type="range"] {
     width: 100%;

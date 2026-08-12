@@ -1,58 +1,59 @@
 import { html, type TemplateResult } from "lit";
 import type { HomeAssistant } from "./types";
 
-/** Entity IDs of the given domains, favorites first. */
-export function entityIdsForDomains(
-  hass: HomeAssistant,
-  domains: string[] | null,
-  favorites: string[] = []
-): string[] {
-  const all = Object.keys(hass.states)
-    .filter((eid) => !domains || domains.includes(eid.split(".", 1)[0]))
-    .sort((a, b) => a.localeCompare(b));
-  if (!favorites.length) return all;
-  const favSet = new Set(favorites);
-  return [...favorites.filter((f) => all.includes(f)), ...all.filter((e) => !favSet.has(e))];
+export interface EntitySelectorFilter {
+  domain?: string[];
 }
 
-/** One shared `<datalist>` per form (by stable `listId`). */
-export function renderEntityDatalist(
+export interface EntitySelectorConfig {
+  filter?: EntitySelectorFilter[];
+  multiple: boolean;
+}
+
+export interface AreaSelectorConfig {
+  multiple: boolean;
+}
+
+/** Build the native Home Assistant entity selector configuration. */
+export function entitySelectorConfig(domains?: string[]): EntitySelectorConfig {
+  return {
+    ...(domains ? { filter: [{ domain: domains }] } : {}),
+    multiple: false,
+  };
+}
+
+/** Render Home Assistant's native searchable entity picker. */
+export function renderEntitySelector(
   hass: HomeAssistant,
-  listId: string,
-  domains: string[] | null,
-  favorites: string[] = []
+  value: string,
+  onValue: (value: string) => void,
+  domains?: string[]
 ): TemplateResult {
-  const ids = entityIdsForDomains(hass, domains, favorites);
   return html`
-    <datalist id=${listId}>
-      ${ids.map((id) => html`<option value=${id}></option>`)}
-    </datalist>
+    <ha-selector
+      .hass=${hass}
+      .selector=${{ entity: entitySelectorConfig(domains) }}
+      .value=${value}
+      @value-changed=${(event: CustomEvent<{ value?: string }>) =>
+        onValue(event.detail.value ?? "")}
+    ></ha-selector>
   `;
 }
 
-/**
- * Browser autocomplete for entity_id — works inside panel_custom scoped
- * registries where `ha-entity-picker` is not registered.
- */
-export function renderEntityField(
-  listId: string,
-  label: string,
+/** Render Home Assistant's native searchable area picker. */
+export function renderAreaSelector(
+  hass: HomeAssistant,
   value: string,
-  onValue: (v: string) => void,
-  placeholder = ""
+  onValue: (value: string) => void
 ): TemplateResult {
+  const config: AreaSelectorConfig = { multiple: false };
   return html`
-    <div>
-      <label class="field-label">${label}</label>
-      <input
-        type="text"
-        list=${listId}
-        .value=${value}
-        placeholder=${placeholder}
-        spellcheck="false"
-        autocomplete="off"
-        @input=${(e: Event) => onValue((e.target as HTMLInputElement).value)}
-      />
-    </div>
+    <ha-selector
+      .hass=${hass}
+      .selector=${{ area: config }}
+      .value=${value}
+      @value-changed=${(event: CustomEvent<{ value?: string }>) =>
+        onValue(event.detail.value ?? "")}
+    ></ha-selector>
   `;
 }

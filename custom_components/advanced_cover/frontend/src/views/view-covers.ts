@@ -1,7 +1,7 @@
 import { LitElement, css, html, nothing } from "lit";
 import { compassStyles, formatAzimuth, renderCompass } from "../compass";
 import { deleteCover, probeCover, saveCover, testCover } from "../data/api";
-import { renderEntityDatalist } from "../entity-input";
+import { renderAreaSelector, renderEntitySelector } from "../entity-input";
 import { defineCustomElementOnce, formatApiError, formatTime } from "../helpers";
 import { formatReason } from "../reasons";
 import { renderHelp } from "../help";
@@ -1007,7 +1007,6 @@ export class ViewCovers extends LitElement {
   private _renderDialog() {
     const draft = this._draft;
     if (!draft) return nothing;
-    const areas = Object.values(this.hass.areas ?? {});
     const caps = this._draftCaps;
     const isAwning = draft.kind === "awning";
     return html`
@@ -1030,16 +1029,6 @@ export class ViewCovers extends LitElement {
           </div>
           <div class="dialog-scroll">
             ${this._error ? html`<p class="error">${this._error}</p>` : nothing}
-
-            ${renderEntityDatalist(this.hass, "ac-covers-list", ["cover"])}
-            ${renderEntityDatalist(this.hass, "ac-contacts-list", [
-              "binary_sensor",
-              "sensor",
-            ])}
-            ${renderEntityDatalist(this.hass, "ac-scripts-list", ["script"])}
-            <datalist id="ac-areas-list">
-              ${areas.map((a) => html`<option value=${a.area_id}>${a.name}</option>`)}
-            </datalist>
 
             <div class="row">
               <div class="grow">
@@ -1076,18 +1065,15 @@ export class ViewCovers extends LitElement {
                 <label class="field-label"
                   >${t(this.hass, "config_panel.covers_field_entity")}</label
                 >
-                <input
-                  type="text"
-                  list="ac-covers-list"
-                  .value=${draft.cover_entity_id}
-                  spellcheck="false"
-                  autocomplete="off"
-                  @input=${(e: Event) =>
-                    this._patchDraft({
-                      cover_entity_id: (e.target as HTMLInputElement).value,
-                    })}
-                  @change=${() => this._probe()}
-                />
+                ${renderEntitySelector(
+                  this.hass,
+                  draft.cover_entity_id,
+                  (value) => {
+                    this._patchDraft({ cover_entity_id: value });
+                    void this._probe();
+                  },
+                  ["cover"]
+                )}
               </div>
             </div>
             ${caps
@@ -1122,15 +1108,9 @@ export class ViewCovers extends LitElement {
                 <label class="field-label"
                   >${t(this.hass, "config_panel.covers_field_area")}</label
                 >
-                <input
-                  type="text"
-                  list="ac-areas-list"
-                  .value=${draft.area_id ?? ""}
-                  @input=${(e: Event) =>
-                    this._patchDraft({
-                      area_id: (e.target as HTMLInputElement).value || null,
-                    })}
-                />
+                ${renderAreaSelector(this.hass, draft.area_id ?? "", (value) =>
+                  this._patchDraft({ area_id: value || null })
+                )}
               </div>
               <div class="grow">
                 <label class="field-label"
@@ -1161,33 +1141,23 @@ export class ViewCovers extends LitElement {
                 <label class="field-label"
                   >${t(this.hass, "config_panel.covers_field_low_entity")}</label
                 >
-                <input
-                  type="text"
-                  list="ac-covers-list"
-                  .value=${draft.low_mode_entity_id ?? ""}
-                  spellcheck="false"
-                  autocomplete="off"
-                  @input=${(e: Event) =>
-                    this._patchDraft({
-                      low_mode_entity_id: (e.target as HTMLInputElement).value || null,
-                    })}
-                />
+                ${renderEntitySelector(
+                  this.hass,
+                  draft.low_mode_entity_id ?? "",
+                  (value) => this._patchDraft({ low_mode_entity_id: value || null }),
+                  ["cover"]
+                )}
               </div>
               <div class="grow">
                 <label class="field-label"
                   >${t(this.hass, "config_panel.covers_field_low_script")}</label
                 >
-                <input
-                  type="text"
-                  list="ac-scripts-list"
-                  .value=${draft.low_mode_script_id ?? ""}
-                  spellcheck="false"
-                  autocomplete="off"
-                  @input=${(e: Event) =>
-                    this._patchDraft({
-                      low_mode_script_id: (e.target as HTMLInputElement).value || null,
-                    })}
-                />
+                ${renderEntitySelector(
+                  this.hass,
+                  draft.low_mode_script_id ?? "",
+                  (value) => this._patchDraft({ low_mode_script_id: value || null }),
+                  ["script"]
+                )}
               </div>
             </div>
             ${draft.low_mode_entity_id || draft.low_mode_script_id
@@ -1222,19 +1192,15 @@ export class ViewCovers extends LitElement {
                       <label class="field-label"
                         >${t(this.hass, "config_panel.covers_field_contact")}</label
                       >
-                      <input
-                        type="text"
-                        list="ac-contacts-list"
-                        .value=${draft.contact_entity_id ?? ""}
-                        spellcheck="false"
-                        autocomplete="off"
-                        @input=${(e: Event) =>
-                          this._patchDraft({
-                            contact_entity_id:
-                              (e.target as HTMLInputElement).value || null,
-                          })}
-                        @change=${() => this._probe()}
-                      />
+                      ${renderEntitySelector(
+                        this.hass,
+                        draft.contact_entity_id ?? "",
+                        (value) => {
+                          this._patchDraft({ contact_entity_id: value || null });
+                          void this._probe();
+                        },
+                        ["binary_sensor", "sensor"]
+                      )}
                     </div>
                   </div>
                   ${draft.contact_entity_id
