@@ -533,7 +533,11 @@ class AdvancedCoverScheduler:
 
             plan: list[Occurrence] = []
             for scenario in data.scenarios:
-                if not scenario.enabled or weekday not in scenario.weekdays:
+                if (
+                    not scenario.enabled
+                    or weekday not in scenario.weekdays
+                    or not scenario.active_on(today)
+                ):
                     continue
                 fire_ats: dict[str, datetime] = {}
                 if (

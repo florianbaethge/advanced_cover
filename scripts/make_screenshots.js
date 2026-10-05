@@ -4,7 +4,8 @@
  *
  * Renders the Advanced Cover panel headless (system Chrome via puppeteer-core),
  * authenticated with a Home Assistant long-lived access token, and writes tight,
- * sidebar-free PNGs for each tab plus the cover/scenario editors.
+ * sidebar-free PNGs for each tab plus the cover/scenario editors (the scenario
+ * editor twice: as the collapsed overview and with its "When" section open).
  *
  * Prerequisites:
  *   - A sandbox HA reachable at HA_URL with a "Demo" Advanced Cover entry that
@@ -135,18 +136,26 @@ async function clipToContent(page, file, maxHeight) {
 }
 
 // Open an editor dialog, unlock its inner scroll and clip to the full form.
-async function editorShot(page, viewTag, itemName, file) {
+//
+// The scenario editor is an accordion that opens as four collapsed summaries;
+// `section` unfolds one of them ("when" | "only_if" | "then" | "covers") and
+// `option` one of its option chips (e.g. "period").
+async function editorShot(page, viewTag, itemName, file, { section = null, option = null } = {}) {
   await page.evaluate(
-    (vt, name, ws) => {
+    (vt, name, sec, opt, ws) => {
       eval(ws);
       let view = null;
       for (const e of walk(document)) if (e.tagName === vt) view = e;
       const list = vt === "AC-VIEW-COVERS" ? view.snapshot.covers : view.snapshot.scenarios;
       view._openEdit(list.find((x) => x.name === name) || list[0]);
+      view._openSection = sec;
+      view._openOption = opt;
       view.requestUpdate();
     },
     viewTag,
     itemName,
+    section,
+    option,
     walkSrc
   );
   await sleep(900);
@@ -243,6 +252,15 @@ async function editorShot(page, viewTag, itemName, file) {
   await waitForView(page, "AC-VIEW-SCENARIOS");
   await sleep(1000);
   console.log("scenario_edit.png", JSON.stringify(await editorShot(page, "AC-VIEW-SCENARIOS", "Midday shade", "scenario_edit.png")));
+  console.log(
+    "scenario_edit_when.png",
+    JSON.stringify(
+      await editorShot(page, "AC-VIEW-SCENARIOS", "Midday shade", "scenario_edit_when.png", {
+        section: "when",
+        option: "retry",
+      })
+    )
+  );
 
   await browser.close();
 })().catch((e) => {

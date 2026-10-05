@@ -49,7 +49,7 @@ export function renderEntityField(
     <ha-entity-picker
       class=${className ?? ""}
       .hass=${hass}
-      .label=${label}
+      .label=${label || undefined}
       .value=${value || undefined}
       .includeDomains=${domains ?? undefined}
       .allowCustomEntity=${allowCustom}
