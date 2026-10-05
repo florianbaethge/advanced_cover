@@ -69,10 +69,12 @@ function renderConditionEntityField(
   cond: Condition,
   patch: (entityId: string) => Partial<Condition>
 ): TemplateResult {
+  // No floating label: it sits above the field and pushes the picker out of
+  // line with the rest of the sentence. The picker's own placeholder suffices.
   return renderEntityField(
     opts.hass,
     null,
-    t(opts.hass, "config_panel.cond_entity_label"),
+    "",
     cond.entity_id ?? "",
     (v) => {
       // The picker re-emits on every render pass; only a real change may run
@@ -365,9 +367,6 @@ export function renderConditionEditor(
   ];
   return html`
     <div>
-      ${opts.conditions.length
-        ? html`<p class="muted">${t(hass, "config_panel.cond_all_must_match")}</p>`
-        : nothing}
       ${opts.conditions.map((c, i) => renderCondition(opts, c, i))}
       <div class="row">
         <select

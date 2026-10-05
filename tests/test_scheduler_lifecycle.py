@@ -20,6 +20,7 @@ from custom_components.advanced_cover.const import (
 )
 from custom_components.advanced_cover.executor import ExecutionOutcome
 from custom_components.advanced_cover.models import (
+    ActivePeriod,
     Assignment,
     CoverItem,
     EntryData,
@@ -112,6 +113,42 @@ async def test_midnight_rollover_starts_fresh(hass: HomeAssistant, freezer) -> N
     assert occ.fired is False
     assert occ.runs["c1"].status == RUN_STATE_IDLE
     assert occ.runs["c1"].result is None
+
+    await scheduler.async_shutdown()
+
+
+async def test_active_period_keeps_scenario_out_of_the_plan(
+    hass: HomeAssistant, freezer
+) -> None:
+    """Outside its active periods a scenario is not planned at all."""
+    await use_utc(hass)
+    freezer.move_to("2026-03-31 06:00:00+00:00")
+    data = make_data()
+    data.scenarios[0].active_periods = [
+        ActivePeriod("04-01", "05-31"),
+        ActivePeriod("09-03", "10-12"),
+    ]
+    coordinator = StubCoordinator(data)
+    executor = StubExecutor(ExecutionOutcome(RESULT_EXECUTED))
+    scheduler = AdvancedCoverScheduler(hass, coordinator, executor)
+    await scheduler.async_rebuild_plan()
+    assert coordinator.plan == []
+
+    # A manual run ignores the period, just like it ignores the weekdays.
+    await scheduler.async_run_scenario("s1")
+    assert executor.calls == 1
+
+    freezer.move_to("2026-04-01 00:00:30+00:00")
+    await scheduler.async_rebuild_plan()
+    assert [occ.scenario_id for occ in coordinator.plan] == ["s1"]
+
+    freezer.move_to("2026-06-01 00:00:30+00:00")
+    await scheduler.async_rebuild_plan()
+    assert coordinator.plan == []
+
+    freezer.move_to("2026-09-03 00:00:30+00:00")
+    await scheduler.async_rebuild_plan()
+    assert [occ.scenario_id for occ in coordinator.plan] == ["s1"]
 
     await scheduler.async_shutdown()
 

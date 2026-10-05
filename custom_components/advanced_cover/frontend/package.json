@@ -1,11 +1,12 @@
 {
   "name": "advanced-cover-panel",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "rollup -c",
-    "watch": "rollup -c -w"
+    "watch": "rollup -c -w",
+    "test": "node --import ./test/register.mjs --test \"test/*.test.mjs\""
   },
   "dependencies": {
     "home-assistant-js-websocket": "^9.4.0",

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from custom_components.advanced_cover.models import (
     ActionOverride,
+    ActivePeriod,
     Assignment,
     Condition,
     CoverAction,
@@ -73,6 +76,92 @@ def test_scenario_defensive_defaults():
 def test_empty_weekdays_means_all():
     restored = Scenario.from_dict({"name": "X", "weekdays": []})
     assert len(restored.weekdays) == 7
+
+
+def _seasonal(*periods: tuple[str, str]) -> Scenario:
+    return Scenario(
+        id="s", name="S", active_periods=[ActivePeriod(a, b) for a, b in periods]
+    )
+
+
+def test_active_periods_round_trip_and_normalization():
+    restored = Scenario.from_dict(
+        {
+            "name": "X",
+            "active_periods": [
+                {"from": "4-1", "to": "5-31"},
+                {"from": "09-03", "to": "10-12"},
+            ],
+        }
+    )
+    assert [p.to_dict() for p in restored.active_periods] == [
+        {"from": "04-01", "to": "05-31"},
+        {"from": "09-03", "to": "10-12"},
+    ]
+    assert Scenario.from_dict(restored.to_dict()).to_dict() == restored.to_dict()
+
+
+def test_unusable_active_periods_are_dropped():
+    # Legacy store data without the field → active all year.
+    legacy = Scenario.from_dict({"name": "X"})
+    assert legacy.active_periods == []
+    assert legacy.active_on(date(2026, 1, 1))
+
+    restored = Scenario.from_dict(
+        {
+            "name": "X",
+            "active_periods": [
+                {"from": "04-01"},
+                {"from": "04-31", "to": "10-15"},  # April has 30 days
+                {"from": "13-01", "to": "10-15"},
+                {"from": "april", "to": "10-15"},
+                "04-01",
+                {"from": "06-01", "to": "08-31"},
+            ],
+        }
+    )
+    assert [p.to_dict() for p in restored.active_periods] == [
+        {"from": "06-01", "to": "08-31"}
+    ]
+    assert Scenario.from_dict({"name": "X", "active_periods": "x"}).active_periods == []
+
+
+def test_active_on_is_inclusive():
+    summer = _seasonal(("04-01", "10-15"))
+    assert not summer.active_on(date(2026, 3, 31))
+    assert summer.active_on(date(2026, 4, 1))
+    assert summer.active_on(date(2026, 7, 20))
+    assert summer.active_on(date(2026, 10, 15))
+    assert not summer.active_on(date(2026, 10, 16))
+
+
+def test_active_on_ors_several_periods():
+    shoulder = _seasonal(("04-01", "05-31"), ("09-03", "10-12"))
+    assert shoulder.active_on(date(2026, 4, 1))
+    assert shoulder.active_on(date(2026, 5, 31))
+    assert not shoulder.active_on(date(2026, 6, 1))
+    assert not shoulder.active_on(date(2026, 9, 2))
+    assert shoulder.active_on(date(2026, 9, 3))
+    assert shoulder.active_on(date(2026, 10, 12))
+    assert not shoulder.active_on(date(2026, 10, 13))
+
+
+def test_active_on_wraps_around_new_year():
+    winter = _seasonal(("10-16", "03-31"))
+    assert winter.active_on(date(2026, 10, 16))
+    assert winter.active_on(date(2026, 12, 31))
+    assert winter.active_on(date(2027, 1, 1))
+    assert winter.active_on(date(2027, 3, 31))
+    assert not winter.active_on(date(2027, 4, 1))
+    assert not winter.active_on(date(2026, 10, 15))
+
+
+def test_active_on_leap_day_bound():
+    # A period ending on Feb 29 simply ends on Feb 28 in a non-leap year.
+    until_leap_day = _seasonal(("01-01", "02-29"))
+    assert until_leap_day.active_on(date(2026, 2, 28))
+    assert not until_leap_day.active_on(date(2026, 3, 1))
+    assert until_leap_day.active_on(date(2028, 2, 29))
 
 
 def test_resolved_action_merges_override():

@@ -43,6 +43,10 @@ jobs:
           cd custom_components/advanced_cover/frontend
           npm ci
           npm run build
+      - name: Frontend unit tests
+        run: |
+          cd custom_components/advanced_cover/frontend
+          npm test
       - name: Pytest
         run: pytest tests/
 

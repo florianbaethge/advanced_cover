@@ -24,7 +24,7 @@ Rule-based, scenario-driven automation for covers (shutters, venetian blinds, aw
 You build two things in the panel — **covers** and **scenarios** — and Advanced Cover turns them into a deterministic daily plan.
 
 - **A cover** links one of your existing cover entities and adds what automation needs: its **facing** (azimuth, for sun-protection logic), an optional **window / contact sensor** with a built-in safety rule, an optional **low / discreet drive** (a slower, quieter motor path or a script), plus automatic capability detection (position / tilt / open-close only).
-- **A scenario** is one rule: a **trigger** at a fixed time or relative to the sun (sunrise / sunset / solar noon, ± offset, optional random window), optional **"only if" conditions**, a **target** position and tilt, and the **covers** it applies to — each cover with optional extra conditions and overrides.
+- **A scenario** is one rule: a **trigger** at a fixed time or relative to the sun (sunrise / sunset / solar noon, ± offset, optional random window), limited to chosen **weekdays** and optional **times of year** (e.g. 1 Apr – 15 Oct, several periods, also across New Year), optional **"only if" conditions**, a **target** position and tilt, and the **covers** it applies to — each cover with optional extra conditions and overrides.
 
 Advanced Cover brings no sensors of its own — no weather service, no presence detection, no lux. It **orchestrates the cover entities you already have**, driven by signals from helpers you already trust (a weather `input_select`, a presence `input_boolean`, a lux threshold sensor). Conditions are evaluated against the *current* state at trigger time. The one deliberate exception is the **re-arm window**: a scenario that just missed its conditions stays **armed** and re-checks whenever a failing entity changes — event-driven, no polling, at most once per day.
 
@@ -34,7 +34,7 @@ Advanced Cover brings no sensors of its own — no weather service, no presence 
 |---|---|
 | **Today** | 0–24 h timeline of the day plan with live status per action (planned / executed / skipped / waiting / blocked), master switch, recalculate, sun times |
 | **Covers** | Manage covers: capability detection (position / tilt / open-close only), low mode, window contact with state mapping, safety options, test buttons ▲ ■ ▼ |
-| **Scenarios** | The editor: When (time/sun ± offset, random window, weekdays, re-arm) · Only if (sentence conditions) · Then (position, tilt, mode) · Covers (assignments, extra conditions, overrides) |
+| **Scenarios** | The accordion editor: When (time/sun ± offset, random window, weekdays, time of year, re-arm) · Only if (sentence conditions) · Then (position, tilt, mode) · Covers (assignments, extra conditions, overrides) |
 | **Log** | Every execution, skip, wait and block with its reason |
 
 ### Conditions (curated, AND-only)
@@ -76,8 +76,11 @@ Conditions are evaluated **per cover**, not per scenario — see the FAQ below f
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/florianbaethge/advanced_cover/main/screenshots/scenario_edit.png" alt="Scenario editor — When, Only if, Then and Covers" width="380">
+  <img src="https://raw.githubusercontent.com/florianbaethge/advanced_cover/main/screenshots/scenario_edit.png" alt="Scenario editor — the four sections When, Only if, Then and Covers, each collapsed to a one-line summary" width="380">
+  <img src="https://raw.githubusercontent.com/florianbaethge/advanced_cover/main/screenshots/scenario_edit_when.png" alt="Scenario editor — the When section unfolded, with its option chips" width="380">
 </p>
+
+The editor is an accordion: a scenario opens as four one-line summaries that read like a sentence (when … only if … then … for these covers), and one section unfolds at a time. Everything optional — random window, weekdays, time of year, re-arm window, mode, safety behavior — sits behind a chip that shows its current value, so the whole scenario fits on a phone screen.
 
 **Log** — every execution, skip, wait and block with its reason:
 
@@ -152,6 +155,10 @@ At 13:00 cloudy → the assignment arms and waits. Helper switches to sunny at 1
 No auto-revert by design. Model it as a second, opposite scenario:
 trigger 13:00, re-arm until 18:00, condition `weather helper is cloudy`, **cover condition "position below 85 %"** (so it only opens what the sun scenario closed), action 100 %.
 Two opposite scenarios with at-most-once-per-day can each fire once — ping-pong is impossible.
+
+### Sun protection only in the warm months
+
+Set the scenario's **time of year** to e.g. 1 Apr – 15 Oct (both days included), or add several periods — 1 Apr – 31 May plus 3 Sep – 12 Oct — of which any one is enough. Outside them the scenario is not planned at all — no daily "skipped" entries in the log — while "Run now" keeps working. A start after the end (15 Oct – 31 Mar) runs across the turn of the year and makes a winter scenario.
 
 ### The baby-room rule ("don't touch a manually closed cover")
 

@@ -112,6 +112,12 @@ export interface Assignment {
   action_override: ActionOverride | null;
 }
 
+/** Yearly stretch of days as yearless "MM-DD" dates, both inclusive. */
+export interface ActivePeriod {
+  from: string;
+  to: string;
+}
+
 export interface Scenario {
   id: string;
   name: string;
@@ -120,6 +126,8 @@ export interface Scenario {
   random_window_min: number;
   random_direction: "after" | "before" | "both";
   weekdays: string[];
+  /** Times of year the scenario runs in (OR-ed); empty = all year. */
+  active_periods: ActivePeriod[];
   conditions: Condition[];
   retry_window_min: number;
   action: CoverAction;

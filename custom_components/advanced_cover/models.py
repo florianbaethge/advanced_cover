@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 from .const import (
@@ -103,6 +104,26 @@ def _str_or_none(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+# February counts 29 days: a yearless date must be able to name the leap day.
+_DAYS_IN_MONTH = (31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+
+
+def _month_day(value: Any) -> str | None:
+    """Normalize a yearless "MM-DD" date; ``None`` when missing or impossible."""
+    if value is None:
+        return None
+    parts = str(value).strip().split("-")
+    if len(parts) != 2:
+        return None
+    try:
+        month, day = int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
+    if not (1 <= month <= 12 and 1 <= day <= _DAYS_IN_MONTH[month - 1]):
+        return None
+    return f"{month:02d}-{day:02d}"
 
 
 @dataclass
@@ -418,6 +439,40 @@ class Assignment:
 
 
 @dataclass
+class ActivePeriod:
+    """One yearly stretch of days, as yearless "MM-DD" dates (both inclusive).
+
+    A start after the end wraps around the turn of the year (10-15 → 03-31
+    is a winter period).
+    """
+
+    start: str
+    end: str
+
+    def contains(self, day: date) -> bool:
+        """Whether ``day`` lies inside this period."""
+        today = f"{day.month:02d}-{day.day:02d}"
+        if self.start <= self.end:
+            return self.start <= today <= self.end
+        return today >= self.start or today <= self.end
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to JSON-compatible dict."""
+        return {"from": self.start, "to": self.end}
+
+    @staticmethod
+    def from_dict(data: Any) -> ActivePeriod | None:
+        """Deserialize from store/WS dict; ``None`` for an unusable period."""
+        if not isinstance(data, dict):
+            return None
+        start = _month_day(data.get("from"))
+        end = _month_day(data.get("to"))
+        if start is None or end is None:
+            return None
+        return ActivePeriod(start=start, end=end)
+
+
+@dataclass
 class Scenario:
     """One scenario: trigger + conditions + default action + assignments."""
 
@@ -428,10 +483,18 @@ class Scenario:
     random_window_min: int = 0
     random_direction: str = RANDOM_DIRECTION_BOTH
     weekdays: list[str] = field(default_factory=lambda: list(WEEKDAYS))
+    # Times of year the scenario runs in (OR-ed); empty = all year.
+    active_periods: list[ActivePeriod] = field(default_factory=list)
     conditions: list[Condition] = field(default_factory=list)
     retry_window_min: int = DEFAULT_RETRY_WINDOW_MIN
     action: CoverAction = field(default_factory=CoverAction)
     assignments: list[Assignment] = field(default_factory=list)
+
+    def active_on(self, day: date) -> bool:
+        """Whether ``day`` lies inside one of the scenario's active periods."""
+        if not self.active_periods:
+            return True
+        return any(period.contains(day) for period in self.active_periods)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to JSON-compatible dict."""
@@ -443,6 +506,7 @@ class Scenario:
             "random_window_min": self.random_window_min,
             "random_direction": self.random_direction,
             "weekdays": list(self.weekdays),
+            "active_periods": [p.to_dict() for p in self.active_periods],
             "conditions": [c.to_dict() for c in self.conditions],
             "retry_window_min": self.retry_window_min,
             "action": self.action.to_dict(),
@@ -455,6 +519,12 @@ class Scenario:
         weekdays = [d for d in (data.get("weekdays") or []) if d in WEEKDAYS]
         if not weekdays:
             weekdays = list(WEEKDAYS)
+        periods_raw = data.get("active_periods")
+        active_periods = [
+            period
+            for raw in (periods_raw if isinstance(periods_raw, list) else [])
+            if (period := ActivePeriod.from_dict(raw)) is not None
+        ]
         return Scenario(
             id=str(data.get("id") or new_id()),
             name=str(data.get("name") or "Scenario"),
@@ -467,6 +537,7 @@ class Scenario:
                 data.get("random_direction"), RANDOM_DIRECTIONS, RANDOM_DIRECTION_BOTH
             ),
             weekdays=weekdays,
+            active_periods=active_periods,
             conditions=[Condition.from_dict(c) for c in (data.get("conditions") or [])],
             retry_window_min=_clamp(
                 data.get("retry_window_min", DEFAULT_RETRY_WINDOW_MIN),

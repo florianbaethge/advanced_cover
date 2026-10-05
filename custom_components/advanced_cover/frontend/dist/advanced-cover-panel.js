@@ -173,6 +173,80 @@ function minutesOfDay(iso) {
         return null;
     return d.getHours() * 60 + d.getMinutes();
 }
+/** Days per month of a yearless date; February includes the leap day. */
+const DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+function daysInMonth(month) {
+    return DAYS_IN_MONTH[month - 1] ?? 31;
+}
+/** Parse a yearless "MM-DD" date (a scenario's active period bounds). */
+function parseMonthDay(value) {
+    const match = /^(\d{1,2})-(\d{1,2})$/.exec(value ?? "");
+    if (!match)
+        return null;
+    const month = Number(match[1]);
+    const day = Number(match[2]);
+    if (month < 1 || month > 12 || day < 1 || day > daysInMonth(month))
+        return null;
+    return { month, day };
+}
+function toMonthDay(month, day) {
+    const clamped = Math.min(day, daysInMonth(month));
+    return `${String(month).padStart(2, "0")}-${String(clamped).padStart(2, "0")}`;
+}
+function userLanguage(hass) {
+    return hass?.locale?.language ?? hass?.language;
+}
+/** Localized month name; 2024 is a leap year, so every "MM-DD" is a real date. */
+function monthName(hass, month) {
+    return new Date(2024, month - 1, 1).toLocaleDateString(userLanguage(hass), {
+        month: "long",
+    });
+}
+/** "1. Apr" / "Apr 1" for a yearless "MM-DD" date in the user's locale. */
+function formatMonthDay(hass, value) {
+    const md = parseMonthDay(value);
+    if (!md)
+        return "–";
+    return new Date(2024, md.month - 1, md.day).toLocaleDateString(userLanguage(hass), {
+        day: "numeric",
+        month: "short",
+    });
+}
+const dayKey = (month, day) => month * 100 + day;
+/**
+ * Whether `now` lies inside one of the yearly periods (both days inclusive, a
+ * start after the end wraps over the turn of the year; no periods = all
+ * year). Mirrors `Scenario.active_on` in the backend.
+ */
+function inActivePeriods(periods, now = new Date()) {
+    if (!periods?.length)
+        return true;
+    const today = dayKey(now.getMonth() + 1, now.getDate());
+    return periods.some((p) => {
+        const start = parseMonthDay(p.from);
+        const end = parseMonthDay(p.to);
+        if (!start || !end)
+            return false;
+        const a = dayKey(start.month, start.day);
+        const b = dayKey(end.month, end.day);
+        return a <= b ? a <= today && today <= b : today >= a || today <= b;
+    });
+}
+/** Start ("MM-DD") of the period that begins next after `now`. */
+function nextPeriodStart(periods, now = new Date()) {
+    const today = dayKey(now.getMonth() + 1, now.getDate());
+    let best = null;
+    for (const p of periods ?? []) {
+        const start = parseMonthDay(p.from);
+        if (!start)
+            continue;
+        // Days-ish until the start, a passed start counting for next year.
+        const wait = (dayKey(start.month, start.day) - today + 1300) % 1300;
+        if (!best || wait < best.wait)
+            best = { from: p.from, wait };
+    }
+    return best?.from ?? null;
+}
 
 /** How long to wait for a core element before rendering anyway. */
 const ELEMENT_TIMEOUT_MS = 2000;
@@ -1082,6 +1156,10 @@ const sharedStyles = i$5 `
   }
 `;
 
+/**
+ * Compass-point math, free of any rendering import so it can be unit-tested
+ * and shared with the scenario summaries.
+ */
 /** The eight compass points and their azimuth in degrees. */
 const COMPASS = [
     ["N", 0],
@@ -1106,6 +1184,7 @@ function nearestCompassDeg(azimuth) {
     const a = ((azimuth % 360) + 360) % 360;
     return (Math.round(a / 45) % 8) * 45;
 }
+
 /**
  * Compass widget: eight direction buttons arranged in a circle around the
  * current azimuth value. Spatially readable, with the number field as a
@@ -1196,7 +1275,7 @@ domains, label, value, onValue, { allowCustom = false, className } = {}) {
     <ha-entity-picker
       class=${className ?? ""}
       .hass=${hass}
-      .label=${label}
+      .label=${label || undefined}
       .value=${value || undefined}
       .includeDomains=${domains ?? undefined}
       .allowCustomEntity=${allowCustom}
@@ -2904,7 +2983,9 @@ function remove(opts, index) {
  * editing the rest of the row.
  */
 function renderConditionEntityField(opts, index, cond, patch) {
-    return renderEntityField(opts.hass, null, t(opts.hass, "config_panel.cond_entity_label"), cond.entity_id ?? "", (v) => {
+    // No floating label: it sits above the field and pushes the picker out of
+    // line with the rest of the sentence. The picker's own placeholder suffices.
+    return renderEntityField(opts.hass, null, "", cond.entity_id ?? "", (v) => {
         // The picker re-emits on every render pass; only a real change may run
         // `patch`, which is what drops the states belonging to the old entity.
         if (v === (cond.entity_id ?? ""))
@@ -3145,9 +3226,6 @@ function renderConditionEditor(opts) {
     ];
     return b `
     <div>
-      ${opts.conditions.length
-        ? b `<p class="muted">${t(hass, "config_panel.cond_all_must_match")}</p>`
-        : A}
       ${opts.conditions.map((c, i) => renderCondition(opts, c, i))}
       <div class="row">
         <select
@@ -3306,9 +3384,222 @@ function renderCondChecklist(hass, conditions) {
     });
 }
 
+/**
+ * One-line summaries of a scenario's parts.
+ *
+ * The scenario editor is an accordion: a collapsed section shows what it
+ * holds, so an existing scenario reads like a sentence (when … only if …
+ * then … for these covers). The scenario list uses the same texts, so the
+ * two can never describe one scenario differently.
+ *
+ * No rendering imports on purpose — this module is unit-tested under Node.
+ */
+/** The editor's sections, in reading order. */
+const SECTIONS = ["when", "only_if", "then", "covers"];
+const WEEKDAY_COUNT = 7;
+/** Stands in for the part of a condition that has not been chosen yet. */
+const PENDING = "…";
+const SEPARATOR = " · ";
+// Number and unit never wrap apart ("1" at the end of a line, "h" on the next).
+const NBSP = "\u00a0";
+/** "45 min" below an hour, "4 h" from there on (re-arm and random windows). */
+function formatWindow(minutes) {
+    return minutes < 60 || minutes % 60
+        ? `${minutes}${NBSP}min`
+        : `${minutes / 60}${NBSP}h`;
+}
+function signed(value) {
+    return value > 0 ? `+${value}` : `${value}`;
+}
+/** What fires the scenario: "08:30", "Sunset +20 min", "Sun direction SW". */
+function triggerText(hass, s) {
+    const trigger = s.trigger;
+    const offset = trigger.offset_min ? ` ${signed(trigger.offset_min)}${NBSP}min` : "";
+    if (trigger.type === "fixed_time")
+        return trigger.time_local ?? "";
+    if (trigger.type === "sun_azimuth") {
+        const target = trigger.az_relative
+            ? `${t(hass, "config_panel.cond_sun_rel_short")} ${signed(trigger.azimuth_offset_deg ?? 0)}°`
+            : formatAzimuth(trigger.azimuth_deg ?? 180);
+        return `${t(hass, "config_panel.trigger_sun_azimuth")} ${target}${offset}`;
+    }
+    if (trigger.type === "sun_elevation") {
+        const arrow = (trigger.elevation_dir ?? "falling") === "rising" ? "↑" : "↓";
+        return `${t(hass, "config_panel.trigger_sun_elevation")} ${arrow} ${trigger.elevation_deg ?? 0}°${offset}`;
+    }
+    return `${t(hass, `config_panel.sun_${trigger.sun_event}`)}${offset}`;
+}
+/** The random window as a range ("± 15 min"), or `null` when it is off. */
+function randomText(s) {
+    const window = s.random_window_min;
+    if (!window)
+        return null;
+    if (s.random_direction === "after")
+        return `+0…${window}${NBSP}min`;
+    if (s.random_direction === "before")
+        return `−${window}…0${NBSP}min`;
+    return `±${NBSP}${window}${NBSP}min`;
+}
+/** "daily", or the selected weekdays in week order. */
+function weekdaysText(hass, s) {
+    // An empty selection is stored as "every day" by the backend.
+    if (!s.weekdays.length || s.weekdays.length === WEEKDAY_COUNT) {
+        return t(hass, "config_panel.weekdays_all");
+    }
+    return s.weekdays.map((d) => t(hass, `config_panel.weekday_${d}`)).join(" ");
+}
+/** The active periods ("Apr 1 – May 31, Sep 3 – Oct 12"); empty = all year. */
+function periodsText(hass, s) {
+    return (s.active_periods ?? [])
+        .map((p) => `${formatMonthDay(hass, p.from)} – ${formatMonthDay(hass, p.to)}`)
+        .join(", ");
+}
+/** Trigger, random window, weekdays and time of year — the scenario list line. */
+function scheduleText(hass, s) {
+    const random = randomText(s);
+    const trigger = random
+        ? `${triggerText(hass, s)} ${random}`
+        : triggerText(hass, s);
+    return [trigger, weekdaysText(hass, s), periodsText(hass, s)]
+        .filter(Boolean)
+        .join(SEPARATOR);
+}
+/** Summary of the "When" section: the schedule plus the re-arm window. */
+function summarizeWhen(hass, s) {
+    const retry = s.retry_window_min
+        ? t(hass, "config_panel.scenarios_sum_retry", {
+            window: formatWindow(s.retry_window_min),
+        })
+        : "";
+    return [scheduleText(hass, s), retry].filter(Boolean).join(SEPARATOR);
+}
+/** Friendly name of an entity, falling back to its id. */
+function entityName(hass, entityId) {
+    if (!entityId)
+        return "";
+    const name = hass?.states?.[entityId]?.attributes?.friendly_name;
+    return typeof name === "string" && name ? name : entityId;
+}
+function stateLabel(hass, entityId, state) {
+    const stateObj = entityId ? hass?.states?.[entityId] : undefined;
+    if (!stateObj || !hass?.formatEntityState)
+        return state;
+    return hass.formatEntityState(stateObj, state) || state;
+}
+/** One condition as a short phrase ("Weather = Sunny", "Position > 5%"). */
+function conditionText(hass, cond) {
+    const entity = entityName(hass, cond.entity_id);
+    // A condition that is still being filled in reads "… = …", never a bare "=".
+    const states = (cond.states ?? [])
+        .map((state) => stateLabel(hass, cond.entity_id, state))
+        .join("/") || PENDING;
+    const entityBased = cond.type === "entity_state" ||
+        cond.type === "entity_state_not" ||
+        cond.type === "numeric_state";
+    if (entityBased && !entity) {
+        return `${t(hass, `config_panel.cond_type_${cond.type}`)} ${PENDING}`;
+    }
+    switch (cond.type) {
+        case "entity_state":
+            return `${entity} = ${states}`;
+        case "entity_state_not":
+            return `${entity} ≠ ${states}`;
+        case "numeric_state": {
+            const bounds = [
+                cond.above != null ? `> ${cond.above}` : "",
+                cond.below != null ? `< ${cond.below}` : "",
+            ].filter(Boolean);
+            return `${entity} ${bounds.join(" ") || PENDING}`;
+        }
+        case "cover_position": {
+            const label = t(hass, "config_panel.scenarios_position");
+            if (cond.op === "between") {
+                const [low, high] = [cond.value ?? 0, cond.value2 ?? cond.value ?? 0].sort((a, b) => a - b);
+                return `${label} ${low}–${high}%`;
+            }
+            return `${label} ${cond.op === "below" ? "<" : ">"} ${cond.value ?? 0}%`;
+        }
+        case "contact":
+            return `${t(hass, "config_panel.cond_type_contact")}: ${(cond.accepted ?? [])
+                .map((state) => t(hass, `config_panel.contact_${state}`))
+                .join("/")}`;
+        case "sun_position": {
+            const parts = [];
+            if (cond.above != null)
+                parts.push(`> ${cond.above}°`);
+            if (cond.below != null)
+                parts.push(`< ${cond.below}°`);
+            if (cond.az_mode === "absolute") {
+                parts.push(`${cond.az_from ?? 0}°–${cond.az_to ?? 0}°`);
+            }
+            else if (cond.az_mode === "relative") {
+                parts.push(`${t(hass, "config_panel.cond_sun_rel_short")} ${signed(cond.az_from ?? 0)}°…${signed(cond.az_to ?? 0)}°`);
+            }
+            return `${t(hass, "config_panel.cond_type_sun_position")}: ${parts.join(SEPARATOR)}`;
+        }
+        default:
+            return "";
+    }
+}
+/** `items`, cut to `max` entries with a "+n" for the rest. */
+function truncated(hass, items, max, separator) {
+    if (items.length <= max)
+        return items.join(separator);
+    const more = t(hass, "config_panel.scenarios_cond_more", { n: items.length - max });
+    return `${items.slice(0, max).join(separator)} ${more}`;
+}
+/** Summary of the "Only if" section; says so when nothing restricts the run. */
+function summarizeConditions(hass, conditions, max = 2) {
+    if (!conditions.length)
+        return t(hass, "config_panel.scenarios_sum_always");
+    return truncated(hass, conditions.map((cond) => conditionText(hass, cond)), max, SEPARATOR);
+}
+/** Summary of the "Then" section: target plus every non-default option. */
+function summarizeThen(hass, s) {
+    const action = s.action;
+    const parts = [`→ ${action.position}%`];
+    if (action.tilt_position != null) {
+        parts.push(`${t(hass, "config_panel.scenarios_tilt")} ${action.tilt_position}%`);
+    }
+    if (action.mode === "low") {
+        parts.push(`${t(hass, "config_panel.scenarios_mode")}: ${t(hass, "config_panel.mode_low")}`);
+    }
+    if (action.safety_override) {
+        parts.push(t(hass, `config_panel.safety_override_${action.safety_override}`));
+    }
+    if (action.min_position_delta != null) {
+        parts.push(`${t(hass, "config_panel.scenarios_opt_min_delta")} ${action.min_position_delta}%`);
+    }
+    return parts.join(SEPARATOR);
+}
+/** Summary of the "Covers" section from the assigned covers' names. */
+function summarizeCovers(hass, coverNames, max = 3) {
+    if (!coverNames.length)
+        return t(hass, "config_panel.scenarios_sum_no_covers");
+    return truncated(hass, coverNames, max, ", ");
+}
+/** Value shown on the "time of year" option chip. */
+function periodValue(hass, s) {
+    const count = (s.active_periods ?? []).length;
+    if (!count)
+        return t(hass, "config_panel.scenarios_period_all_year");
+    if (count === 1)
+        return periodsText(hass, s);
+    return t(hass, "config_panel.scenarios_period_count", { n: count });
+}
+
 const WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 const RANDOM_WINDOWS = [0, 15, 30, 60];
 const RETRY_WINDOWS = [0, 15, 30, 45, 60, 120, 240, 480];
+// Pre-filled for a newly added active period: April through September.
+const DEFAULT_PERIOD = { from: "04-01", to: "09-30" };
+const TRIGGER_TYPES = ["fixed_time", "sun_event", "sun_azimuth", "sun_elevation"];
+const SECTION_ICONS = {
+    when: "mdi:clock-outline",
+    only_if: "mdi:filter-variant",
+    then: "mdi:swap-vertical",
+    covers: "mdi:window-shutter",
+};
 const DAYPART_ICONS = {
     night: "mdi:weather-night",
     morning: "mdi:weather-sunset-up",
@@ -3331,6 +3622,7 @@ function emptyScenario() {
         random_window_min: 0,
         random_direction: "both",
         weekdays: [...WEEKDAYS],
+        active_periods: [],
         conditions: [],
         retry_window_min: 0,
         action: {
@@ -3363,6 +3655,10 @@ class ViewScenarios extends i$2 {
         this._dragOverIndex = null;
         this._runPopoverId = null;
         this._menuOpenId = null;
+        // Editor accordion: at most one section and, inside it, one option is open.
+        this._openSection = null;
+        this._openOption = null;
+        this._headMenuOpen = false;
     }
     static { this.properties = {
         hass: { attribute: false },
@@ -3543,44 +3839,275 @@ class ViewScenarios extends i$2 {
       .popover ha-icon {
         --mdc-icon-size: 18px;
       }
-      /* Editor dialog sticky frame. */
+      /* Editor dialog: sticky head and foot around a scrolling accordion. */
       .dialog.sticky {
         padding: 0;
         display: flex;
         flex-direction: column;
         max-height: 92vh;
-        max-width: 760px;
+        max-width: 720px;
       }
       .dialog-head {
-        position: sticky;
-        top: 0;
-        background: var(--card-background-color);
-        padding: 18px 24px 12px;
+        /* Above the scrolling body, so the overflow menu covers it. */
+        position: relative;
+        z-index: 2;
+        padding: 14px 20px;
         border-bottom: 1px solid var(--divider-color);
-        z-index: 1;
         display: flex;
         align-items: center;
         gap: 12px;
       }
-      .dialog-head h3 {
-        margin: 0;
+      .dialog-head .name-input {
         flex: 1;
+        min-width: 0;
+        font-size: 1.1rem;
+        font-weight: 500;
       }
-      .dialog-scroll {
-        overflow-y: auto;
-        padding: 12px 24px;
+      .dialog-head .name-input.invalid {
+        border-color: var(--error-color);
       }
-      .dialog-foot {
-        position: sticky;
-        bottom: 0;
-        background: var(--card-background-color);
-        padding: 12px 24px;
-        border-top: 1px solid var(--divider-color);
-        display: flex;
+      .head-switch {
+        display: inline-flex;
         align-items: center;
         gap: 8px;
-        flex-wrap: wrap;
+        font-size: 0.85rem;
+        color: var(--secondary-text-color);
+        white-space: nowrap;
+        cursor: pointer;
       }
+      .head-menu {
+        position: relative;
+      }
+      .head-menu .popover {
+        min-width: 260px;
+      }
+      .popover .menu-note {
+        margin: 6px 6px 2px;
+        font-size: 0.76rem;
+        line-height: 1.35;
+        color: var(--secondary-text-color);
+      }
+      .dialog-scroll {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        padding: 14px 20px 6px;
+      }
+      .dialog-foot {
+        padding: 12px 20px;
+        border-top: 1px solid var(--divider-color);
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+
+      /* Accordion sections. */
+      .acc {
+        border: 1px solid var(--divider-color);
+        border-radius: 12px;
+        margin-bottom: 10px;
+        transition: border-color 0.15s ease;
+      }
+      .acc.open {
+        border-color: color-mix(in srgb, var(--primary-color) 55%, var(--divider-color));
+      }
+      .acc-head {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+        box-sizing: border-box;
+        padding: 12px 12px 12px 14px;
+        border: none;
+        border-radius: 11px;
+        background: none;
+        color: inherit;
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+      .acc-head:hover {
+        background: color-mix(in srgb, var(--primary-color) 6%, transparent);
+      }
+      .acc-head:focus-visible {
+        outline: 2px solid var(--primary-color);
+        outline-offset: -2px;
+      }
+      .acc-icon {
+        flex: none;
+        display: grid;
+        place-items: center;
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        background: color-mix(in srgb, var(--primary-color) 14%, transparent);
+        color: var(--primary-color);
+        --mdc-icon-size: 20px;
+      }
+      .acc-text {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .acc-label {
+        font-size: 0.72rem;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--secondary-text-color);
+      }
+      .acc.open .acc-label {
+        color: var(--primary-color);
+      }
+      .acc-summary {
+        font-size: 0.92rem;
+        line-height: 1.35;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        overflow: hidden;
+        overflow-wrap: anywhere;
+      }
+      .acc-summary.muted {
+        color: var(--secondary-text-color);
+      }
+      .acc-summary.warn {
+        color: var(--warning-color, #f0b23a);
+      }
+      .acc-chevron {
+        flex: none;
+        color: var(--secondary-text-color);
+        transition: transform 0.2s ease;
+      }
+      .acc.open .acc-chevron {
+        transform: rotate(180deg);
+      }
+      .acc-body {
+        padding: 14px;
+        border-top: 1px solid var(--divider-color);
+      }
+      /* The body's padding is the only space below its last element. */
+      .acc-body > :last-child,
+      .acc-body > div:last-child > .row:last-child {
+        margin-bottom: 0;
+      }
+      .acc-next {
+        display: flex;
+        justify-content: flex-end;
+        margin-top: 12px;
+      }
+      .acc-next .btn-outline {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        --mdc-icon-size: 18px;
+      }
+
+      /* Optional settings: value chips, the open one's editor underneath. */
+      .opt-title {
+        font-size: 0.78rem;
+        color: var(--secondary-text-color);
+        margin: 14px 0 6px;
+      }
+      .opt-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .opt-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        max-width: 100%;
+        font: inherit;
+        font-size: 0.82rem;
+        padding: 5px 6px 5px 12px;
+        border-radius: 16px;
+        border: 1px solid var(--divider-color);
+        background: transparent;
+        color: var(--primary-text-color);
+        cursor: pointer;
+      }
+      .opt-chip:focus-visible {
+        outline: 2px solid var(--primary-color);
+        outline-offset: 1px;
+      }
+      .opt-chip-label {
+        color: var(--secondary-text-color);
+        white-space: nowrap;
+      }
+      .opt-chip-value {
+        min-width: 0;
+        font-weight: 500;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .opt-chip-value::first-letter {
+        text-transform: uppercase;
+      }
+      .opt-chip ha-icon {
+        flex: none;
+        --mdc-icon-size: 16px;
+        color: var(--secondary-text-color);
+        transition: transform 0.2s ease;
+      }
+      .opt-chip.set {
+        border-color: color-mix(in srgb, var(--primary-color) 50%, transparent);
+        background: color-mix(in srgb, var(--primary-color) 12%, transparent);
+      }
+      .opt-chip.set .opt-chip-value {
+        color: var(--primary-color);
+      }
+      .opt-chip.open {
+        border-color: var(--primary-color);
+        box-shadow: 0 0 0 1px var(--primary-color);
+      }
+      .opt-chip.open ha-icon {
+        transform: rotate(180deg);
+      }
+      .opt-panel {
+        padding: 12px;
+        margin-top: 10px;
+        border-radius: 10px;
+        background: color-mix(in srgb, var(--primary-text-color) 5%, transparent);
+      }
+      /* A select sizes itself to its longest option — keep it inside the panel. */
+      .acc-body select {
+        max-width: 100%;
+      }
+      .opt-panel > :last-child,
+      .opt-panel > .row:last-child {
+        margin-bottom: 0;
+      }
+
+      /* One active period: "from" and "to" wrap as whole groups. */
+      .period-row {
+        flex-wrap: nowrap;
+        background: var(--card-background-color);
+      }
+      .period-ends {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 18px;
+      }
+      .period-end {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .period-end > span {
+        min-width: 2.3em;
+        color: var(--secondary-text-color);
+      }
+      .period-end select.day {
+        min-width: 64px;
+      }
+
       .seg {
         display: inline-flex;
         border: 1px solid var(--divider-color);
@@ -3599,6 +4126,19 @@ class ViewScenarios extends i$2 {
       .seg button.selected {
         background: var(--primary-color);
         color: var(--text-primary-color, #fff);
+      }
+      /* Trigger type: four equal cells, two by two on a phone. */
+      .seg.seg-fill {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        margin-bottom: 12px;
+      }
+      .seg.seg-fill button {
+        padding: 9px 6px;
+      }
+      .trigger-fields {
+        align-items: center;
+        margin-bottom: 0;
       }
       .assignment-box {
         border: 1px solid var(--divider-color);
@@ -3666,6 +4206,42 @@ class ViewScenarios extends i$2 {
         }
       }
       @container acview (max-width: 620px) {
+        /* The editor takes the whole screen on a phone. */
+        .dialog-backdrop.editor {
+          padding: 0;
+          align-items: stretch;
+        }
+        .dialog.sticky {
+          max-width: none;
+          max-height: none;
+          border-radius: 0;
+        }
+        .dialog-head {
+          padding: 10px 12px;
+          gap: 8px;
+        }
+        .head-switch span {
+          display: none;
+        }
+        .dialog-scroll {
+          padding: 12px 12px 4px;
+        }
+        .dialog-foot {
+          padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+        }
+        .dialog-foot button {
+          flex: 1;
+        }
+        .acc-head {
+          padding: 10px 8px 10px 10px;
+          gap: 10px;
+        }
+        .acc-body {
+          padding: 12px 10px;
+        }
+        .seg.seg-fill {
+          grid-template-columns: repeat(2, 1fr);
+        }
         .srow-body {
           gap: 8px;
         }
@@ -3699,68 +4275,6 @@ class ViewScenarios extends i$2 {
     }
     _occFor(s) {
         return this.snapshot.plan.find((o) => o.scenario_id === s.id);
-    }
-    _triggerSummary(s) {
-        const offset = s.trigger.offset_min
-            ? ` ${s.trigger.offset_min > 0 ? "+" : ""}${s.trigger.offset_min} min`
-            : "";
-        let trig;
-        if (s.trigger.type === "fixed_time") {
-            trig = s.trigger.time_local ?? "";
-        }
-        else if (s.trigger.type === "sun_azimuth") {
-            const off = s.trigger.azimuth_offset_deg ?? 0;
-            const target = s.trigger.az_relative
-                ? `${t(this.hass, "config_panel.cond_sun_rel_short")} ${off > 0 ? `+${off}` : off}°`
-                : formatAzimuth(s.trigger.azimuth_deg ?? 180);
-            trig = `${t(this.hass, "config_panel.trigger_sun_azimuth")} ${target}${offset}`;
-        }
-        else if (s.trigger.type === "sun_elevation") {
-            const arrow = (s.trigger.elevation_dir ?? "falling") === "rising" ? "↑" : "↓";
-            trig = `${t(this.hass, "config_panel.trigger_sun_elevation")} ${arrow} ${s.trigger.elevation_deg ?? 0}°${offset}`;
-        }
-        else {
-            trig = `${t(this.hass, `config_panel.sun_${s.trigger.sun_event}`)}${offset}`;
-        }
-        const random = s.random_window_min ? ` ± ${s.random_window_min} min` : "";
-        const days = s.weekdays.length === 7
-            ? t(this.hass, "config_panel.weekdays_all")
-            : s.weekdays.map((d) => t(this.hass, `config_panel.weekday_${d}`)).join(" ");
-        return `${trig}${random} · ${days}`;
-    }
-    _condChipText(cond) {
-        const e = cond.entity_id ?? "";
-        switch (cond.type) {
-            case "entity_state":
-                return `${e} = ${(cond.states ?? []).join("/")}`;
-            case "entity_state_not":
-                return `${e} ≠ ${(cond.states ?? []).join("/")}`;
-            case "numeric_state":
-                return `${e} ${cond.above != null ? `> ${cond.above}` : ""}${cond.below != null ? ` < ${cond.below}` : ""}`.trim();
-            case "cover_position":
-                return `${t(this.hass, "config_panel.scenarios_position")} ${cond.op} ${cond.value}%`;
-            case "contact":
-                return `${t(this.hass, "config_panel.cond_type_contact")}: ${(cond.accepted ?? [])
-                    .map((s) => t(this.hass, `config_panel.contact_${s}`))
-                    .join("/")}`;
-            case "sun_position": {
-                const parts = [];
-                if (cond.above != null)
-                    parts.push(`> ${cond.above}°`);
-                if (cond.below != null)
-                    parts.push(`< ${cond.below}°`);
-                if (cond.az_mode === "absolute") {
-                    parts.push(`${cond.az_from ?? 0}°–${cond.az_to ?? 0}°`);
-                }
-                else if (cond.az_mode === "relative") {
-                    const sign = (n) => (n > 0 ? `+${n}` : `${n}`);
-                    parts.push(`${t(this.hass, "config_panel.cond_sun_rel_short")} ${sign(cond.az_from ?? 0)}°…${sign(cond.az_to ?? 0)}°`);
-                }
-                return `${t(this.hass, "config_panel.cond_type_sun_position")}: ${parts.join(" · ")}`;
-            }
-            default:
-                return "";
-        }
     }
     _scenarioMinute(s) {
         const occ = this._occFor(s);
@@ -3845,28 +4359,61 @@ class ViewScenarios extends i$2 {
         this.requestUpdate();
     }
     // ------------------------------------------------------------------ actions
-    _openAdd() {
-        this._draft = emptyScenario();
+    /** Show the editor; `section` is the accordion section that starts open. */
+    _showEditor(draft, section) {
+        this._draft = draft;
         this._error = undefined;
-        this._warnings = [];
-        this.requestUpdate();
-    }
-    _openEdit(scenario) {
-        this._draft = JSON.parse(JSON.stringify(scenario));
-        this._error = undefined;
-        this._warnings = scenario.warnings ?? [];
+        this._openSection = section;
+        this._openOption = null;
+        this._headMenuOpen = false;
         this._menuOpenId = null;
         this.requestUpdate();
+    }
+    _closeEditor() {
+        this._draft = null;
+        this._headMenuOpen = false;
+        this.requestUpdate();
+    }
+    _openAdd() {
+        // A new scenario is walked through top to bottom, starting with "When".
+        this._warnings = [];
+        this._showEditor(emptyScenario(), "when");
+    }
+    _openEdit(scenario) {
+        // An existing one opens as an overview: four summaries, nothing unfolded.
+        this._warnings = scenario.warnings ?? [];
+        this._showEditor(JSON.parse(JSON.stringify(scenario)), null);
+    }
+    async _toggleSection(id) {
+        const opening = this._openSection !== id;
+        this._openSection = opening ? id : null;
+        this._openOption = null;
+        this.requestUpdate();
+        if (!opening)
+            return;
+        await this.updateComplete;
+        this.renderRoot
+            .querySelector(`.acc[data-section="${id}"]`)
+            ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+    _sectionLabel(id) {
+        switch (id) {
+            case "when":
+                return t(this.hass, "config_panel.scenarios_when");
+            case "only_if":
+                return t(this.hass, "config_panel.scenarios_only_if");
+            case "then":
+                return t(this.hass, "config_panel.scenarios_then");
+            default:
+                return t(this.hass, "config_panel.scenarios_covers");
+        }
     }
     _duplicate(scenario) {
         const copy = JSON.parse(JSON.stringify(scenario));
         copy.id = "";
         copy.name = `${copy.name} (copy)`;
-        this._draft = copy;
-        this._error = undefined;
         this._warnings = [];
-        this._menuOpenId = null;
-        this.requestUpdate();
+        this._showEditor(copy, null);
     }
     async _save() {
         if (!this._draft)
@@ -3874,6 +4421,7 @@ class ViewScenarios extends i$2 {
         if (!this._draft.name.trim()) {
             this._error = t(this.hass, "config_panel.scenarios_err_name_required");
             this.requestUpdate();
+            this.renderRoot.querySelector(".name-input")?.focus();
             return;
         }
         this._busy = true;
@@ -3957,14 +4505,13 @@ class ViewScenarios extends i$2 {
         ids.splice(dropIndex, 0, moved);
         await this._reorder(ids);
     }
-    async _runNow(scenarioId) {
+    async _runNow(scenarioId, ignoreConditions = this._runIgnoreConditions) {
         this._runPopoverId = null;
+        this._headMenuOpen = false;
         this._busy = true;
         this.requestUpdate();
         try {
-            await runScenario(this.hass, this.entryId, scenarioId, {
-                ignoreConditions: this._runIgnoreConditions,
-            });
+            await runScenario(this.hass, this.entryId, scenarioId, { ignoreConditions });
             this._error = undefined;
         }
         catch (e) {
@@ -3992,8 +4539,15 @@ class ViewScenarios extends i$2 {
             return b `<span class="badge">${t(this.hass, "config_panel.scenarios_disabled_off")}</span>`;
         }
         const occ = this._occFor(s);
-        if (!occ)
-            return A;
+        if (!occ) {
+            return inActivePeriods(s.active_periods)
+                ? A
+                : b `<span class="badge"
+            >${t(this.hass, "config_panel.scenarios_paused_until", {
+                    date: formatMonthDay(this.hass, nextPeriodStart(s.active_periods)),
+                })}</span
+          >`;
+        }
         if (occ.fired)
             return this._renderResultBadge(occ);
         return occPreflightBadge(this.hass, occ);
@@ -4052,7 +4606,7 @@ class ViewScenarios extends i$2 {
               ${this._renderBadge(scenario)}
             </div>
             <div class="srow-meta">
-              ${this._triggerSummary(scenario)} ·
+              ${scheduleText(this.hass, scenario)} ·
               ${t(this.hass, "config_panel.scenarios_covers_count", {
             n: scenario.assignments.length,
         })}
@@ -4067,7 +4621,7 @@ class ViewScenarios extends i$2 {
             </div>
             ${shownConds.length
             ? b `<div class="cond-chips">
-                  ${shownConds.map((c) => b `<span class="cond-chip">${this._condChipText(c)}</span>`)}
+                  ${shownConds.map((c) => b `<span class="cond-chip">${conditionText(this.hass, c)}</span>`)}
                   ${conds.length > 2
                 ? b `<span class="cond-chip"
                         >${t(this.hass, "config_panel.scenarios_cond_more", {
@@ -4207,24 +4761,54 @@ class ViewScenarios extends i$2 {
       </div>
     `;
     }
-    // ---- editor dialog sections (unchanged logic, emoji-free) ----
-    _renderWhenSection(draft) {
+    // ---- editor dialog: accordion sections ----
+    /**
+     * A row of option chips with the editor of the open one underneath.
+     *
+     * Everything optional in a section lives here, so the section itself stays
+     * short: the chip shows the current value, a tap unfolds its editor.
+     */
+    _renderOptions(options) {
+        const open = options.find((o) => o.id === this._openOption);
         return b `
-      <div class="section-title">${t(this.hass, "config_panel.scenarios_when")}</div>
-      <div class="row">
-        <div class="seg">
-          ${["fixed_time", "sun_event", "sun_azimuth", "sun_elevation"].map((tt) => b `
-              <button
-                type="button"
-                class=${draft.trigger.type === tt ? "selected" : ""}
-                @click=${() => this._patch({ trigger: { ...draft.trigger, type: tt } })}
-              >
-                ${t(this.hass, tt === "sun_event"
+      <div class="opt-title">${t(this.hass, "config_panel.scenarios_options")}</div>
+      <div class="opt-chips">
+        ${options.map((o) => b `<button
+            type="button"
+            class="opt-chip ${o.set ? "set" : ""} ${o === open ? "open" : ""}"
+            data-option=${o.id}
+            aria-expanded=${o === open ? "true" : "false"}
+            @click=${() => {
+            this._openOption = o === open ? null : o.id;
+            this.requestUpdate();
+        }}
+          >
+            <span class="opt-chip-label">${o.label}</span>
+            <span class="opt-chip-value">${o.value}</span>
+            <ha-icon icon="mdi:chevron-down"></ha-icon>
+          </button>`)}
+      </div>
+      ${open ? b `<div class="opt-panel">${open.render()}</div>` : A}
+    `;
+    }
+    _renderWhenBody(draft) {
+        const off = t(this.hass, "config_panel.off");
+        const weekdayCount = draft.weekdays.length;
+        return b `
+      <div class="seg seg-fill">
+        ${TRIGGER_TYPES.map((tt) => b `
+            <button
+              type="button"
+              class=${draft.trigger.type === tt ? "selected" : ""}
+              @click=${() => this._patch({ trigger: { ...draft.trigger, type: tt } })}
+            >
+              ${t(this.hass, tt === "sun_event"
             ? "config_panel.trigger_sun"
             : `config_panel.trigger_${tt}`)}
-              </button>
-            `)}
-        </div>
+            </button>
+          `)}
+      </div>
+      <div class="row trigger-fields">
         ${draft.trigger.type === "fixed_time"
             ? b `<input
               type="time"
@@ -4261,10 +4845,42 @@ class ViewScenarios extends i$2 {
                     : this._renderSunElevationFields(draft)}
       </div>
       ${this._renderLivePreview(draft)}
-
+      ${this._renderOptions([
+            {
+                id: "random",
+                label: t(this.hass, "config_panel.scenarios_opt_random"),
+                value: randomText(draft) ?? off,
+                set: draft.random_window_min > 0,
+                render: () => this._renderRandomField(draft),
+            },
+            {
+                id: "weekdays",
+                label: t(this.hass, "config_panel.scenarios_weekdays"),
+                value: weekdaysText(this.hass, draft),
+                set: weekdayCount > 0 && weekdayCount < WEEKDAYS.length,
+                render: () => this._renderWeekdaysField(draft),
+            },
+            {
+                id: "period",
+                label: t(this.hass, "config_panel.scenarios_period"),
+                value: periodValue(this.hass, draft),
+                set: (draft.active_periods ?? []).length > 0,
+                render: () => this._renderPeriodField(draft),
+            },
+            {
+                id: "retry",
+                label: t(this.hass, "config_panel.scenarios_opt_retry"),
+                value: draft.retry_window_min ? formatWindow(draft.retry_window_min) : off,
+                set: draft.retry_window_min > 0,
+                render: () => this._renderRetryField(draft),
+            },
+        ])}
+    `;
+    }
+    _renderRandomField(draft) {
+        return b `
       <label class="field-label">${t(this.hass, "config_panel.scenarios_random")}</label>
-      ${renderHelp(this.hass, "random")}
-      <div class="row">
+      <div class="row" style="align-items:center">
         <span class="chips">
           ${RANDOM_WINDOWS.map((w) => b `<button
               type="button"
@@ -4289,9 +4905,13 @@ class ViewScenarios extends i$2 {
             </select>`
             : A}
       </div>
-
+      ${renderHelp(this.hass, "random")}
+    `;
+    }
+    _renderWeekdaysField(draft) {
+        return b `
       <label class="field-label">${t(this.hass, "config_panel.scenarios_weekdays")}</label>
-      <div class="chips" style="margin-bottom:12px">
+      <div class="chips">
         ${WEEKDAYS.map((d) => {
             const selected = draft.weekdays.includes(d);
             return b `<button
@@ -4307,23 +4927,105 @@ class ViewScenarios extends i$2 {
           </button>`;
         })}
       </div>
-
+    `;
+    }
+    _renderRetryField(draft) {
+        return b `
       <label class="field-label">${t(this.hass, "config_panel.scenarios_retry")}</label>
-      <div class="chips" style="margin-bottom:4px">
+      <div class="chips" style="margin-bottom:8px">
         ${RETRY_WINDOWS.map((w) => b `<button
             type="button"
             class="chip ${draft.retry_window_min === w ? "selected" : ""}"
             @click=${() => this._patch({ retry_window_min: w })}
           >
-            ${w === 0
-            ? t(this.hass, "config_panel.off")
-            : w < 60
-                ? `${w} min`
-                : `${w / 60} h`}
+            ${w === 0 ? t(this.hass, "config_panel.off") : formatWindow(w)}
           </button>`)}
       </div>
       <p class="section-desc">${t(this.hass, "config_panel.scenarios_retry_hint")}</p>
       ${renderHelp(this.hass, "retry")}
+    `;
+    }
+    _renderPeriodField(draft) {
+        const periods = draft.active_periods ?? [];
+        const limited = periods.length > 0;
+        const setPeriod = (index, patch) => this._patch({
+            active_periods: periods.map((p, i) => (i === index ? { ...p, ...patch } : p)),
+        });
+        const picker = (index, key, label) => {
+            const value = parseMonthDay(periods[index][key]) ?? { month: 1, day: 1 };
+            const pick = (month, day) => setPeriod(index, { [key]: toMonthDay(month, day) });
+            return b `<span class="period-end">
+        <span>${label}</span>
+        <select
+          class="day"
+          @change=${(e) => pick(value.month, Number(e.target.value))}
+        >
+          ${Array.from({ length: daysInMonth(value.month) }, (_, i) => i + 1).map((d) => b `<option value=${d} ?selected=${d === value.day}>${d}.</option>`)}
+        </select>
+        <select
+          @change=${(e) => pick(Number(e.target.value), value.day)}
+        >
+          ${Array.from({ length: 12 }, (_, i) => i + 1).map((m) => b `<option value=${m} ?selected=${m === value.month}>
+              ${monthName(this.hass, m)}
+            </option>`)}
+        </select>
+      </span>`;
+        };
+        return b `
+      <label class="field-label">${t(this.hass, "config_panel.scenarios_period")}</label>
+      <div class="chips" style="margin-bottom:${limited ? 8 : 0}px">
+        <button
+          type="button"
+          class="chip ${limited ? "" : "selected"}"
+          @click=${() => this._patch({ active_periods: [] })}
+        >
+          ${t(this.hass, "config_panel.scenarios_period_all_year")}
+        </button>
+        <button
+          type="button"
+          class="chip ${limited ? "selected" : ""}"
+          @click=${() => {
+            if (!limited)
+                this._patch({ active_periods: [{ ...DEFAULT_PERIOD }] });
+        }}
+        >
+          ${t(this.hass, "config_panel.scenarios_period_limited")}
+        </button>
+      </div>
+      ${limited
+            ? b `
+            ${periods.map((_p, index) => b `
+                <div class="cond-row period-row">
+                  <div class="period-ends">
+                    ${picker(index, "from", t(this.hass, "config_panel.scenarios_period_from"))}
+                    ${picker(index, "to", t(this.hass, "config_panel.scenarios_period_to"))}
+                  </div>
+                  <button
+                    type="button"
+                    class="cond-remove"
+                    title=${t(this.hass, "config_panel.scenarios_period_remove")}
+                    @click=${() => this._patch({
+                active_periods: periods.filter((_x, i) => i !== index),
+            })}
+                  >
+                    <ha-icon icon="mdi:close"></ha-icon>
+                  </button>
+                </div>
+              `)}
+            <div class="chips" style="margin-bottom:8px">
+              <button
+                type="button"
+                class="chip"
+                @click=${() => this._patch({ active_periods: [...periods, { ...DEFAULT_PERIOD }] })}
+              >
+                + ${t(this.hass, "config_panel.scenarios_period_add")}
+              </button>
+            </div>
+            <p class="section-desc">
+              ${t(this.hass, "config_panel.scenarios_period_hint")}
+            </p>
+          `
+            : A}
     `;
     }
     _renderOffsetField(draft) {
@@ -4517,11 +5219,11 @@ class ViewScenarios extends i$2 {
             : ""}
     </p>`;
     }
-    _renderThenSection(draft) {
+    _renderThenBody(draft) {
         const anyTilt = draft.assignments.some((a) => this.snapshot.covers.find((c) => c.id === a.cover_item_id)?.capabilities
             .supports_tilt);
+        const action = draft.action;
         return b `
-      <div class="section-title">${t(this.hass, "config_panel.scenarios_then")}</div>
       <div class="slider-row">
         <ha-icon
           icon=${draft.action.position >= 50
@@ -4591,37 +5293,66 @@ class ViewScenarios extends i$2 {
             </label>
           </div>`
             : A}
-      <div class="row" style="margin-top:8px">
-        <div>
-          <label class="field-label">${t(this.hass, "config_panel.scenarios_mode")}</label>
-          <select
-            style="width:auto"
-            .value=${draft.action.mode}
-            @change=${(e) => this._patch({
+      ${this._renderOptions([
+            {
+                id: "mode",
+                label: t(this.hass, "config_panel.scenarios_mode"),
+                value: t(this.hass, action.mode === "low" ? "config_panel.mode_low" : "config_panel.mode_normal"),
+                set: action.mode === "low",
+                render: () => this._renderModeField(draft),
+            },
+            {
+                id: "safety",
+                label: t(this.hass, "config_panel.scenarios_opt_safety"),
+                value: t(this.hass, `config_panel.safety_override_${action.safety_override ?? "inherit"}`),
+                set: action.safety_override != null,
+                render: () => this._renderSafetyField(draft),
+            },
+            {
+                id: "min_delta",
+                label: t(this.hass, "config_panel.scenarios_opt_min_delta"),
+                value: action.min_position_delta == null
+                    ? t(this.hass, "config_panel.scenarios_opt_default", {
+                        n: this.snapshot.config.default_min_position_delta,
+                    })
+                    : `${action.min_position_delta}%`,
+                set: action.min_position_delta != null,
+                render: () => this._renderMinDeltaField(draft),
+            },
+        ])}
+    `;
+    }
+    _renderModeField(draft) {
+        return b `
+      <label class="field-label">${t(this.hass, "config_panel.scenarios_mode")}</label>
+      <select
+        style="width:auto"
+        .value=${draft.action.mode}
+        @change=${(e) => this._patch({
             action: {
                 ...draft.action,
                 mode: e.target.value,
             },
         })}
-          >
-            <option value="normal" ?selected=${draft.action.mode === "normal"}>
-              ${t(this.hass, "config_panel.mode_normal")}
-            </option>
-            <option value="low" ?selected=${draft.action.mode === "low"}>
-              ${t(this.hass, "config_panel.mode_low")}
-            </option>
-          </select>
-        </div>
-      </div>
+      >
+        <option value="normal" ?selected=${draft.action.mode === "normal"}>
+          ${t(this.hass, "config_panel.mode_normal")}
+        </option>
+        <option value="low" ?selected=${draft.action.mode === "low"}>
+          ${t(this.hass, "config_panel.mode_low")}
+        </option>
+      </select>
       ${renderHelp(this.hass, "mode_low")}
-      <div class="row" style="margin-top:8px">
-        <div>
-          <label class="field-label"
-            >${t(this.hass, "config_panel.scenarios_safety_override")}</label
-          >
-          <select
-            style="width:auto"
-            @change=${(e) => {
+    `;
+    }
+    _renderSafetyField(draft) {
+        return b `
+      <label class="field-label"
+        >${t(this.hass, "config_panel.scenarios_safety_override")}</label
+      >
+      <select
+        style="width:auto"
+        @change=${(e) => {
             const value = e.target.value;
             this._patch({
                 action: {
@@ -4630,51 +5361,47 @@ class ViewScenarios extends i$2 {
                 },
             });
         }}
-          >
-            <option value="" ?selected=${draft.action.safety_override == null}>
-              ${t(this.hass, "config_panel.safety_override_inherit")}
-            </option>
-            <option
-              value="block"
-              ?selected=${draft.action.safety_override === "block"}
-            >
-              ${t(this.hass, "config_panel.safety_override_block")}
-            </option>
-            <option
-              value="clamp"
-              ?selected=${draft.action.safety_override === "clamp"}
-            >
-              ${t(this.hass, "config_panel.safety_override_clamp")}
-            </option>
-            <option
-              value="ignore"
-              ?selected=${draft.action.safety_override === "ignore"}
-            >
-              ${t(this.hass, "config_panel.safety_override_ignore")}
-            </option>
-          </select>
-        </div>
-      </div>
-      <p class="section-desc">
+      >
+        <option value="" ?selected=${draft.action.safety_override == null}>
+          ${t(this.hass, "config_panel.safety_override_inherit")}
+        </option>
+        <option
+          value="block"
+          ?selected=${draft.action.safety_override === "block"}
+        >
+          ${t(this.hass, "config_panel.safety_override_block")}
+        </option>
+        <option
+          value="clamp"
+          ?selected=${draft.action.safety_override === "clamp"}
+        >
+          ${t(this.hass, "config_panel.safety_override_clamp")}
+        </option>
+        <option
+          value="ignore"
+          ?selected=${draft.action.safety_override === "ignore"}
+        >
+          ${t(this.hass, "config_panel.safety_override_ignore")}
+        </option>
+      </select>
+      <p class="section-desc" style="margin-top:8px">
         ${t(this.hass, "config_panel.scenarios_safety_override_hint")}
       </p>
-      <details class="expand">
-        <summary>${t(this.hass, "config_panel.scenarios_advanced")}</summary>
-        <div class="row" style="margin-top:8px">
-          <div>
-            <label class="field-label"
-              >${t(this.hass, "config_panel.scenarios_min_delta")}</label
-            >
-            <input
-              type="number"
-              min="0"
-              max="100"
-              style="width:90px"
-              placeholder=${String(this.snapshot.config.default_min_position_delta)}
-              .value=${draft.action.min_position_delta == null
+    `;
+    }
+    _renderMinDeltaField(draft) {
+        return b `
+      <label class="field-label">${t(this.hass, "config_panel.scenarios_min_delta")}</label>
+      <input
+        type="number"
+        min="0"
+        max="100"
+        style="width:90px"
+        placeholder=${String(this.snapshot.config.default_min_position_delta)}
+        .value=${draft.action.min_position_delta == null
             ? ""
             : String(draft.action.min_position_delta)}
-              @input=${(e) => {
+        @input=${(e) => {
             const raw = e.target.value;
             this._patch({
                 action: {
@@ -4683,12 +5410,11 @@ class ViewScenarios extends i$2 {
                 },
             });
         }}
-            />
-          </div>
-        </div>
-        <p class="section-desc">${t(this.hass, "config_panel.scenarios_min_delta_hint")}</p>
-        ${renderHelp(this.hass, "min_delta")}
-      </details>
+      />
+      <p class="section-desc" style="margin-top:8px">
+        ${t(this.hass, "config_panel.scenarios_min_delta_hint")}
+      </p>
+      ${renderHelp(this.hass, "min_delta")}
     `;
     }
     _patchAssignment(index, patch) {
@@ -4948,11 +5674,10 @@ class ViewScenarios extends i$2 {
       </div>
     `;
     }
-    _renderCoversSection(draft) {
+    _renderCoversBody(draft) {
         const assignedIds = new Set(draft.assignments.map((a) => a.cover_item_id));
         const addable = this.snapshot.covers.filter((c) => !assignedIds.has(c.id));
         return b `
-      <div class="section-title">${t(this.hass, "config_panel.scenarios_covers")}</div>
       ${renderHelp(this.hass, "assignments")}
       ${this._renderQuickAdd(addable)}
       ${draft.assignments.map((a, i) => this._renderAssignment(draft, a, i))}
@@ -4984,35 +5709,148 @@ class ViewScenarios extends i$2 {
             : A}
     `;
     }
+    /** One accordion section: a summary header, the body only while open. */
+    _renderSection(draft, id, summary, tone, body) {
+        const open = this._openSection === id;
+        const next = SECTIONS[SECTIONS.indexOf(id) + 1];
+        return b `
+      <section class="acc ${open ? "open" : ""}" data-section=${id}>
+        <button
+          type="button"
+          class="acc-head"
+          aria-expanded=${open ? "true" : "false"}
+          @click=${() => this._toggleSection(id)}
+        >
+          <span class="acc-icon"><ha-icon icon=${SECTION_ICONS[id]}></ha-icon></span>
+          <span class="acc-text">
+            <span class="acc-label">${this._sectionLabel(id)}</span>
+            <span class="acc-summary ${tone}">${summary}</span>
+          </span>
+          <ha-icon class="acc-chevron" icon="mdi:chevron-down"></ha-icon>
+        </button>
+        ${open
+            ? b `<div class="acc-body">
+              ${body()}
+              ${
+            // A scenario that was never saved is filled in top to bottom.
+            !draft.id && next
+                ? b `<div class="acc-next">
+                      <button
+                        type="button"
+                        class="btn-outline"
+                        @click=${() => this._toggleSection(next)}
+                      >
+                        ${t(this.hass, "config_panel.scenarios_next", {
+                    section: this._sectionLabel(next),
+                })}
+                        <ha-icon icon="mdi:arrow-down"></ha-icon>
+                      </button>
+                    </div>`
+                : A}
+            </div>`
+            : A}
+      </section>
+    `;
+    }
+    _renderOnlyIfBody(draft) {
+        return b `
+      <p class="section-desc">${t(this.hass, "config_panel.scenarios_only_if_desc")}</p>
+      ${renderHelp(this.hass, "conditions_scope")}
+      ${renderConditionEditor({
+            hass: this.hass,
+            conditions: draft.conditions,
+            onChange: (conds) => this._patch({ conditions: conds }),
+            contactAvailable: draft.assignments.some((a) => Boolean(this.snapshot.covers.find((c) => c.id === a.cover_item_id)
+                ?.contact_entity_id)),
+        })}
+    `;
+    }
+    /** Test-run entries of the editor's overflow menu (saved scenarios only). */
+    _renderHeadMenu(draft) {
+        return b `
+      <div class="head-menu" @click=${(e) => e.stopPropagation()}>
+        <button
+          class="iconbtn"
+          aria-label=${t(this.hass, "config_panel.scenarios_more_actions")}
+          title=${t(this.hass, "config_panel.scenarios_more_actions")}
+          aria-expanded=${this._headMenuOpen ? "true" : "false"}
+          @click=${() => {
+            this._headMenuOpen = !this._headMenuOpen;
+            this.requestUpdate();
+        }}
+        >
+          <ha-icon icon="mdi:dots-vertical"></ha-icon>
+        </button>
+        ${this._headMenuOpen
+            ? b `<div class="popover">
+              <button
+                class="menu-item"
+                .disabled=${this._busy}
+                @click=${() => this._runNow(draft.id, false)}
+              >
+                <ha-icon icon="mdi:play"></ha-icon>
+                ${t(this.hass, "config_panel.scenarios_run_now")}
+              </button>
+              <button
+                class="menu-item"
+                .disabled=${this._busy}
+                title=${t(this.hass, "config_panel.scenarios_run_ignore_help")}
+                @click=${() => this._runNow(draft.id, true)}
+              >
+                <ha-icon icon="mdi:play-outline"></ha-icon>
+                ${t(this.hass, "config_panel.scenarios_run_now_ignore")}
+              </button>
+              <p class="menu-note">
+                ${t(this.hass, "config_panel.scenarios_run_saved_hint")}
+              </p>
+            </div>`
+            : A}
+      </div>
+    `;
+    }
     _renderDialog() {
         const draft = this._draft;
         if (!draft)
             return A;
+        const coverNames = draft.assignments.map((a) => this._coverName(a.cover_item_id));
         return b `
       <div
-        class="dialog-backdrop"
+        class="dialog-backdrop editor"
         @click=${(e) => {
-            if (e.target === e.currentTarget) {
-                this._draft = null;
-                this.requestUpdate();
-            }
+            if (e.target === e.currentTarget)
+                this._closeEditor();
         }}
       >
-        <div class="dialog sticky">
+        <div
+          class="dialog sticky"
+          @click=${() => {
+            if (!this._headMenuOpen)
+                return;
+            this._headMenuOpen = false;
+            this.requestUpdate();
+        }}
+        >
           <div class="dialog-head">
-            <h3>
-              ${draft.id
-            ? t(this.hass, "config_panel.scenarios_dialog_edit", { name: draft.name })
-            : t(this.hass, "config_panel.scenarios_dialog_new")}
-            </h3>
-            <label class="checkbox-row" style="margin:0">
-              <input
-                type="checkbox"
+            <input
+              type="text"
+              class="name-input ${this._error && !draft.name.trim() ? "invalid" : ""}"
+              aria-label=${t(this.hass, "config_panel.scenarios_name_placeholder")}
+              placeholder=${t(this.hass, "config_panel.scenarios_name_placeholder")}
+              .value=${draft.name}
+              @input=${(e) => {
+            // Typing a name answers the "name required" error.
+            this._error = undefined;
+            this._patch({ name: e.target.value });
+        }}
+            />
+            <label class="head-switch">
+              <ha-switch
                 .checked=${draft.enabled}
                 @change=${(e) => this._patch({ enabled: e.target.checked })}
-              />
-              ${t(this.hass, "config_panel.scenarios_enabled")}
+              ></ha-switch>
+              <span>${t(this.hass, "config_panel.scenarios_enabled")}</span>
             </label>
+            ${draft.id ? this._renderHeadMenu(draft) : A}
           </div>
           <div class="dialog-scroll">
             ${this._error ? b `<p class="error">${this._error}</p>` : A}
@@ -5020,71 +5858,13 @@ class ViewScenarios extends i$2 {
                 <ha-icon icon="mdi:alert-outline" style="--mdc-icon-size:16px"></ha-icon>
                 ${w}
               </p>`)}
-
-            <div class="row">
-              <div class="grow">
-                <label class="field-label"
-                  >${t(this.hass, "config_panel.scenarios_field_name")}</label
-                >
-                <input
-                  type="text"
-                  .value=${draft.name}
-                  @input=${(e) => this._patch({ name: e.target.value })}
-                />
-              </div>
-            </div>
-
-            ${this._renderWhenSection(draft)}
-
-            <div class="section-title">
-              ${t(this.hass, "config_panel.scenarios_only_if")}
-            </div>
-            <p class="section-desc">
-              ${t(this.hass, "config_panel.scenarios_only_if_desc")}
-            </p>
-            ${renderHelp(this.hass, "conditions_scope")}
-            ${renderConditionEditor({
-            hass: this.hass,
-            conditions: draft.conditions,
-            onChange: (conds) => this._patch({ conditions: conds }),
-            contactAvailable: draft.assignments.some((a) => Boolean(this.snapshot.covers.find((c) => c.id === a.cover_item_id)
-                ?.contact_entity_id)),
-        })}
-
-            ${this._renderThenSection(draft)} ${this._renderCoversSection(draft)}
+            ${this._renderSection(draft, "when", summarizeWhen(this.hass, draft), "", () => this._renderWhenBody(draft))}
+            ${this._renderSection(draft, "only_if", summarizeConditions(this.hass, draft.conditions), draft.conditions.length ? "" : "muted", () => this._renderOnlyIfBody(draft))}
+            ${this._renderSection(draft, "then", summarizeThen(this.hass, draft), "", () => this._renderThenBody(draft))}
+            ${this._renderSection(draft, "covers", summarizeCovers(this.hass, coverNames), coverNames.length ? "" : "warn", () => this._renderCoversBody(draft))}
           </div>
           <div class="dialog-foot">
-            ${draft.id
-            ? b `<label
-                    class="checkbox-row"
-                    style="margin:0"
-                    title=${t(this.hass, "config_panel.scenarios_run_ignore_help")}
-                  >
-                    <input
-                      type="checkbox"
-                      .checked=${this._runIgnoreConditions}
-                      @change=${(e) => {
-                this._runIgnoreConditions = e.target.checked;
-            }}
-                    />
-                    ${t(this.hass, "config_panel.scenarios_run_ignore_short")}
-                  </label>
-                  <button
-                    class="btn-outline"
-                    .disabled=${this._busy}
-                    @click=${() => this._runNow(draft.id)}
-                  >
-                    ${t(this.hass, "config_panel.scenarios_run_now")}
-                  </button>`
-            : A}
-            <span style="flex:1"></span>
-            <button
-              class="btn-outline"
-              @click=${() => {
-            this._draft = null;
-            this.requestUpdate();
-        }}
-            >
+            <button class="btn-outline" @click=${() => this._closeEditor()}>
               ${t(this.hass, "config_panel.cancel")}
             </button>
             <button class="btn" .disabled=${this._busy} @click=${this._save}>
@@ -6425,7 +7205,7 @@ class ViewToday extends i$2 {
 }
 defineCustomElementOnce("ac-view-today", ViewToday);
 
-const VERSION = "0.7.1";
+const VERSION = "0.8.0";
 const PANEL_PAGES = ["today", "covers", "scenarios", "log"];
 const TAB_LABEL_KEYS = {
     today: "config_panel.tab_today",
