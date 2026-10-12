@@ -19,6 +19,19 @@ Rule-based, scenario-driven automation for covers (shutters, venetian blinds, aw
 - **Complete configuration in the GUI** — Today · Covers · Scenarios · Log, no YAML
 - **Pure orchestrator** — drives only existing HA entities; weather/presence signals come from *your* helpers
 
+## Contents
+
+- [How it works](#how-it-works)
+- [The panel](#the-panel)
+- [Dashboard card](#dashboard-card)
+- [Installation](#installation)
+- [Entities](#entities)
+- [Services](#services)
+- [Events](#events)
+- [Documentation](#documentation)
+- [Debug logging](#debug-logging)
+- [Development](#development)
+
 ## How it works
 
 You build two things in the panel — **covers** and **scenarios** — and Advanced Cover turns them into a deterministic daily plan.
@@ -28,7 +41,9 @@ You build two things in the panel — **covers** and **scenarios** — and Advan
 
 Advanced Cover brings no sensors of its own — no weather service, no presence detection, no lux. It **orchestrates the cover entities you already have**, driven by signals from helpers you already trust (a weather `input_select`, a presence `input_boolean`, a lux threshold sensor). Conditions are evaluated against the *current* state at trigger time. The one deliberate exception is the **re-arm window**: a scenario that just missed its conditions stays **armed** and re-checks whenever a failing entity changes — event-driven, no polling, at most once per day.
 
-### The panel
+More on conditions and the design principles behind all this: [Concepts](https://github.com/florianbaethge/advanced_cover/blob/main/docs/concepts.md).
+
+## The panel
 
 | Tab | Purpose |
 |---|---|
@@ -37,56 +52,34 @@ Advanced Cover brings no sensors of its own — no weather service, no presence 
 | **Scenarios** | The accordion editor: When (time/sun ± offset, random window, weekdays, time of year, re-arm) · Only if (sentence conditions) · Then (position, tilt, mode) · Covers (assignments, extra conditions, overrides) |
 | **Log** | Every execution, skip, wait and block with its reason |
 
-### Conditions (curated, AND-only)
-
-| Type | Sentence |
-|---|---|
-| Entity state | "Only if `input_select.weather` is **sunny** or **partly_sunny**" |
-| Entity state NOT | "Only if `binary_sensor.wind_alarm` is NOT **on**" |
-| Cover position | "Only if this cover is currently **above 5 %** open" |
-| Window contact | "Only if the contact is **closed** or **tilted**" |
-| Numeric value | "Only if `sensor.lux` is **above 40000**" |
-
-There is deliberately no AND/OR builder: within a scenario everything is AND; for OR you create a second scenario with the same trigger. This keeps configuration readable instead of turning it into programming.
-
-Conditions are evaluated **per cover**, not per scenario — see the FAQ below for what that means when one scenario drives several windows.
-
-## Screenshots
-
-**Today** — day timeline with live per-action status, master switch and sun times:
-
 <p align="center">
   <img src="https://raw.githubusercontent.com/florianbaethge/advanced_cover/main/screenshots/today.png" alt="Today tab — day timeline and today's plan" width="560">
 </p>
 
-**Covers** — one row per cover with capability detection (position / tilt / open-close only), window contact, low mode and inline test buttons:
+All tabs and both editors with screenshots: [The panel](https://github.com/florianbaethge/advanced_cover/blob/main/docs/panel.md).
+
+## Dashboard card
+
+`custom:advanced-cover-card` brings the day onto your dashboards — for everyone in the household, not only administrators. It is registered automatically and has a visual editor. You pick the **sections** it shows and their order:
+
+| Section | Shows |
+|---|---|
+| `next` | The next scenario with countdown, target and live check, plus buttons to run it now or pause the automation |
+| `timeline` | The Today tab's day and night strip with every run of the day |
+| `covers` | Position, window contact and next action per cover, with open / stop / close |
+| `scenarios` | Every scenario with today's status and a button to run it by hand |
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/florianbaethge/advanced_cover/main/screenshots/covers.png" alt="Covers tab — cover list with capabilities and test buttons" width="560">
+  <img src="https://raw.githubusercontent.com/florianbaethge/advanced_cover/main/screenshots/card_next.png" alt="Card — next up section" width="380">
+  <img src="https://raw.githubusercontent.com/florianbaethge/advanced_cover/main/screenshots/card_covers.png" alt="Card — covers section" width="380">
 </p>
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/florianbaethge/advanced_cover/main/screenshots/cover_edit.png" alt="Cover editor — capabilities, azimuth compass, low mode and window contact" width="380">
-</p>
+```yaml
+type: custom:advanced-cover-card
+sections: [next, timeline, covers, scenarios]
+```
 
-**Scenarios** — every rule with its trigger, sun-phase bar and target position; drag to set priority:
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/florianbaethge/advanced_cover/main/screenshots/scenarios.png" alt="Scenarios tab — scenario list" width="560">
-</p>
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/florianbaethge/advanced_cover/main/screenshots/scenario_edit.png" alt="Scenario editor — the four sections When, Only if, Then and Covers, each collapsed to a one-line summary" width="380">
-  <img src="https://raw.githubusercontent.com/florianbaethge/advanced_cover/main/screenshots/scenario_edit_when.png" alt="Scenario editor — the When section unfolded, with its option chips" width="380">
-</p>
-
-The editor is an accordion: a scenario opens as four one-line summaries that read like a sentence (when … only if … then … for these covers), and one section unfolds at a time. Everything optional — random window, weekdays, time of year, re-arm window, mode, safety behavior — sits behind a chip that shows its current value, so the whole scenario fits on a phone screen.
-
-**Log** — every execution, skip, wait and block with its reason:
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/florianbaethge/advanced_cover/main/screenshots/log.png" alt="Log tab — action log" width="560">
-</p>
+All options, the compact tile and more screenshots: [Dashboard card](https://github.com/florianbaethge/advanced_cover/blob/main/docs/card.md).
 
 ## Installation
 
@@ -126,68 +119,15 @@ All services accept an optional `config_entry_id` (needed only with multiple ent
 
 `advanced_cover_action` fires for every outcome with `config_entry_id`, `scenario_id`, `cover_item_id`, `result` (`executed` / `skipped` / `armed` / `expired` / `blocked_safety` / `unavailable`) and `reason` — ideal for notifications ("bedroom cover was blocked: window open").
 
-## Design principles
+## Documentation
 
-- **Fail-safe** — unavailable entities make conditions fail and moves are skipped with a reason; the integration never moves a cover "just in case".
-- **At most once per day** — each (scenario, cover) pair executes at most once per day. Flap protection belongs into your helpers (see recipes), ping-pong is impossible by construction.
-- **Idempotent** — `min position delta` skips moves when the cover is already close enough to the target (protects motors, avoids twitching after restarts).
-- **Deterministic** — the full day plan including random offsets is computed at midnight, seeded with date + scenario id. The Today tab shows exact times; a restart re-enters open re-arm windows instead of losing them.
-- **Restart-proof** — today's outcomes and the action log are persisted, so a Home Assistant restart neither wipes the day's history nor re-reports fired scenarios as "expired".
-- **Safety rule, not disableable** — with an open contact, automatic closing below the ventilation position is blocked (or clamped). Tilted does not block by default (configurable per cover). Opening and manual control are never restricted. Whether a blocked move stays put, still closes to the ventilation position, or — as an explicit per-scenario opt-in — closes fully despite the open window (e.g. a night close) can be chosen per scenario and overridden per assignment; within the re-arm window a cover that was stopped by the rule retries as soon as the window is closed — whether it stayed put or was clamped to the ventilation position, it then goes to the scenario's full target.
-
-## Recipes
-
-### A stable sunshine helper (recommended pattern)
-
-Advanced Cover deliberately does **not** debounce flapping signals — that belongs into the helper. Build one once and reuse it everywhere:
-
-1. Create a [threshold sensor](https://www.home-assistant.io/integrations/threshold/) on your lux/solar sensor with a generous **hysteresis** (e.g. upper 40000 lx, hysteresis 10000).
-2. Optionally wrap it in a [template binary sensor with `delay_on`/`delay_off`](https://www.home-assistant.io/integrations/template/) of a few minutes.
-3. Use that helper in an *entity state* condition ("Only if `binary_sensor.sunny` is `on`").
-
-### "Close at 13:00 when sunny — or when the sun comes later"
-
-Scenario: trigger 13:00, condition `weather helper is sunny`, re-arm window 4 h, action 0 %.
-At 13:00 cloudy → the assignment arms and waits. Helper switches to sunny at 13:37 → covers close at 13:37. Never sunny until 17:00 → expired, nothing happens.
-
-### "…and open again when it clouds over"
-
-No auto-revert by design. Model it as a second, opposite scenario:
-trigger 13:00, re-arm until 18:00, condition `weather helper is cloudy`, **cover condition "position below 85 %"** (so it only opens what the sun scenario closed), action 100 %.
-Two opposite scenarios with at-most-once-per-day can each fire once — ping-pong is impossible.
-
-### Sun protection only in the warm months
-
-Set the scenario's **time of year** to e.g. 1 Apr – 15 Oct (both days included), or add several periods — 1 Apr – 31 May plus 3 Sep – 12 Oct — of which any one is enough. Outside them the scenario is not planned at all — no daily "skipped" entries in the log — while "Run now" keeps working. A start after the end (15 Oct – 31 Mar) runs across the turn of the year and makes a winter scenario.
-
-### The baby-room rule ("don't touch a manually closed cover")
-
-Add the cover-position condition "only if position **above 5 %**" to the assignment. A cover that was manually closed (≤ 5 %) is skipped. Position conditions never re-arm, so opening the cover by hand later will not trigger a surprise run.
-
-### Presence simulation while away
-
-Give your evening close scenario a random window of ±30 min and add the condition "`input_boolean.vacation` is on" to a duplicate with a wider window — the seeded randomness makes each day different but each *plan* stable.
-
-### Awnings
-
-Create the cover with kind *Awning*. HA convention: **open = extended**. "Extend at 13:00 when sunny" and "retract at sunset" are ordinary scenarios. Wind protection is intentionally out of scope — keep the manufacturer's wind automation active and optionally add a condition "only if `binary_sensor.wind_alarm` is off".
-
-## FAQ
-
-**What happens when a scenario uses mode "Low" but the cover has no low-mode entity/script?**
-The action simply runs on the normal cover entity — it never fails because of the mode. If both entity and script are configured, the script wins and receives the target position as variable `position`.
-
-**Two scenarios hit the same cover in the same minute — who wins?**
-They execute in panel list order (top first); the last executed action determines the final position. The conflict is logged.
-
-**Does the integration fight manual movements?**
-No. There is no manual-movement detection and cover-position conditions never re-arm. Use position conditions (baby-room rule) where manual overrides must be respected.
-
-**One scenario drives several windows with a shared "only if window contact is closed" — does one open window skip everything?**
-No. A scenario is a set of **independent per-cover actions**. Every condition — the scenario's "only if" and any per-cover condition — is evaluated **for each cover on its own**. A *window contact* condition uses that cover's own contact sensor, so "only if the contact is closed" skips only the covers whose window is open; the others still run (each logged with its reason). A condition on a *shared* entity (e.g. one weather helper) is identical for every cover, so it lets them all run or skips them all together. Often you don't even need the condition: the built-in **safety rule** already stops any single cover from closing past its ventilation position while its own window is open.
-
-**What does the "Ignore conditions" checkbox next to "Run now" do?**
-*Run now* fires the scenario immediately — a manual, ephemeral run that ignores the trigger time and never touches today's plan. Tick **Ignore conditions** to also bypass the "only if" checks, so every assigned cover moves to its target regardless of the current state — handy to preview positions or test a scenario at the "wrong" time of day. The safety rule still applies: an open window is never fully closed (unless the scenario's safety override says so).
+| Page | Content |
+|---|---|
+| [Concepts](https://github.com/florianbaethge/advanced_cover/blob/main/docs/concepts.md) | Covers and scenarios, the condition types, design principles (fail-safe, at most once per day, safety rule) |
+| [The panel](https://github.com/florianbaethge/advanced_cover/blob/main/docs/panel.md) | The four tabs and the cover and scenario editors, with screenshots |
+| [Dashboard card](https://github.com/florianbaethge/advanced_cover/blob/main/docs/card.md) | Sections, all options, compact layout, visual editor |
+| [Recipes](https://github.com/florianbaethge/advanced_cover/blob/main/docs/recipes.md) | Sunshine helper, "close when sunny — or later", seasons, the baby-room rule, presence simulation, awnings |
+| [FAQ](https://github.com/florianbaethge/advanced_cover/blob/main/docs/faq.md) | Low mode, conflicting scenarios, manual movements, per-cover conditions, "Ignore conditions" |
 
 ## Debug logging
 
@@ -206,13 +146,14 @@ The day plan, re-arm states and the action log are volatile by design (rebuilt a
 pip install -r requirements_test.txt
 pytest tests/
 
-# Panel
+# Panel and card
 cd custom_components/advanced_cover/frontend
 npm ci
-npm run build   # writes dist/advanced-cover-panel.js (committed)
+npm run build   # writes dist/advanced-cover-panel.js and dist/advanced-cover-card.js (committed)
+npm test
 ```
 
-CI runs ruff (lint + format), pytest, the panel build, hassfest and HACS validation.
+CI runs ruff (lint + format), pytest, the frontend build and its unit tests, hassfest and HACS validation. The screenshots are regenerated with `scripts/make_screenshots.js` (panel) and `scripts/make_card_screenshots.js` (card) against a sandbox Home Assistant.
 
 ## License
 
