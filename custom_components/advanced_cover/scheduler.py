@@ -1101,15 +1101,21 @@ class AdvancedCoverScheduler:
                     "armed_until": (
                         run.armed_until.isoformat() if run.armed_until else None
                     ),
+                    # Facade-relative triggers: not waiting for a condition
+                    # but for this cover's own turn.
+                    "fire_at": run.fire_at.isoformat() if run.fire_at else None,
                     "waiting_for": sorted(run.rearm_entity_ids),
                 }
         for occ in self._plan:
             run = occ.runs.get(cover_item_id)
             if run is None:
                 continue
-            if run.status == RUN_STATE_IDLE and not occ.fired and occ.planned_at >= now:
+            # A facade-relative scenario fires each cover at its own time;
+            # the block's planned time is only the earliest of them.
+            when = run.fire_at or occ.planned_at
+            if run.status == RUN_STATE_IDLE and not occ.fired and when >= now:
                 return {
-                    "when": occ.planned_at.isoformat(),
+                    "when": when.isoformat(),
                     "scenario_id": occ.scenario_id,
                     "scenario_name": occ.scenario_name,
                     "position": run.target_position,

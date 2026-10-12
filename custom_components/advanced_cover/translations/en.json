@@ -518,12 +518,8 @@
     "card_trigger_solar_noon": "Solar noon",
     "card_trigger_sun_azimuth": "Sun direction",
     "card_trigger_sun_elevation": "Sun elevation",
-    "card_timeline_title": "Today",
     "card_timeline_empty": "No scenario fires today.",
-    "card_runs_count": "{n} runs",
-    "card_runs_count_one": "1 run",
     "card_retry_until": "retries until {time}",
-    "card_covers_title": "Covers",
     "card_covers_empty": "No covers set up yet.",
     "card_cover_next": "{time} → {pos} %",
     "card_cover_waiting": "waits until {time}",
@@ -535,7 +531,6 @@
     "card_cover_open": "Open {name}",
     "card_cover_stop": "Stop {name}",
     "card_cover_close": "Close {name}",
-    "card_scenarios_title": "Scenarios",
     "card_scenarios_empty": "No scenarios set up yet.",
     "card_scn_today": "Today {time}",
     "card_scn_not_today": "Not scheduled today",
@@ -582,6 +577,10 @@
     "card_ed_controls": "Open, stop and close buttons",
     "card_ed_confirm": "Ask before running",
     "card_ed_ignore": "Ignore conditions",
-    "card_ed_ignore_help": "Manual runs skip the scenario's conditions. The window safety rule still applies."
+    "card_ed_ignore_help": "Manual runs skip the scenario's conditions. The window safety rule still applies.",
+    "card_master_info": "Show the automation switch",
+    "card_ed_runs": "Manual runs",
+    "card_ed_runs_help": "Applies to every run button on the card.",
+    "card_ed_entry_gone": "{id} (no longer exists)"
   }
 }

@@ -20,7 +20,7 @@ from homeassistant.components.cover import (
     DOMAIN as COVER_DOMAIN,
 )
 from homeassistant.const import ATTR_ENTITY_ID
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import Context, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.sun import get_astral_event_date
 from homeassistant.util import dt as dt_util
@@ -685,13 +685,21 @@ def ws_cover_probe(
 
 
 async def async_drive_cover(
-    hass: HomeAssistant, cover: CoverItem, command: str, position: int | None = None
+    hass: HomeAssistant,
+    cover: CoverItem,
+    command: str,
+    position: int | None = None,
+    *,
+    context: Context | None = None,
 ) -> None:
     """Drive a cover directly (panel test buttons, dashboard card controls).
 
-    Manual low mode: the controls drive the low-speed entity (or script)
-    instead of the normal cover entity. Stop always goes to the normal
-    entity — scripts cannot stop a running move.
+    Manual low mode: the controls drive the low-speed entity instead of the
+    normal cover entity — stop included. With a low-mode *script* there is no
+    entity to stop, so stop goes to the normal cover entity.
+
+    ``context`` carries the calling user, so Home Assistant applies that
+    user's entity permissions and the logbook names who moved the cover.
     """
     service_map = {
         "open": SERVICE_OPEN_COVER,
@@ -710,6 +718,7 @@ async def async_drive_cover(
             cover.low_mode_script_id.split(".", 1)[-1],
             {"position": target},
             blocking=True,
+            context=context,
         )
         return
     if command == "position":
@@ -721,6 +730,7 @@ async def async_drive_cover(
                 ATTR_POSITION: 50 if position is None else position,
             },
             blocking=True,
+            context=context,
         )
         return
     await hass.services.async_call(
@@ -728,6 +738,7 @@ async def async_drive_cover(
         service_map[command],
         {ATTR_ENTITY_ID: entity_id},
         blocking=True,
+        context=context,
     )
 
 
@@ -755,7 +766,13 @@ async def ws_cover_test(
     if cover is None:
         connection.send_error(msg["id"], ERR_NOT_FOUND, "Unknown cover item")
         return
-    await async_drive_cover(hass, cover, msg["command"], msg.get("position"))
+    await async_drive_cover(
+        hass,
+        cover,
+        msg["command"],
+        msg.get("position"),
+        context=connection.context(msg),
+    )
     connection.send_result(msg["id"], {"success": True})
 
 

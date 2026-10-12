@@ -610,7 +610,15 @@ function withEntry(msg, entryId) {
     return entryId ? { ...msg, entry_id: entryId } : msg;
 }
 const listEntries = (hass) => hass.callWS({ type: `${D}/card/entries` });
-const subscribeSnapshot = (hass, callback, entryId) => hass.connection?.subscribeMessage(callback, withEntry({ type: `${D}/card/subscribe` }, entryId));
+/**
+ * Subscribe to the card snapshot of one entry.
+ *
+ * Without the library's automatic resubscription: after a reconnect it sends
+ * the command once and drops the subscription for good if that fails — which
+ * it does while Home Assistant is still starting. The caller resubscribes
+ * itself (on the connection's `ready` event, with retries).
+ */
+const subscribeSnapshot = (hass, callback, entryId) => hass.connection?.subscribeMessage(callback, withEntry({ type: `${D}/card/subscribe` }, entryId), { resubscribe: false });
 const action = (hass, entryId, payload) => hass.callWS(withEntry({ type: `${D}/card/action`, ...payload }, entryId));
 const runScenario = (hass, scenarioId, ignoreConditions, entryId) => action(hass, entryId, {
     action: "run_scenario",
@@ -624,7 +632,7 @@ const driveCover = (hass, coverItemId, command, entryId) => action(hass, entryId
     command,
 });
 
-var translations = {"de":{"status_planned":"Geplant","status_executed":"Ausgeführt","status_skipped":"Übersprungen","status_armed":"Wartet","status_expired":"Abgelaufen","status_blocked_safety":"Blockiert","status_unavailable":"Nicht verfügbar","status_done":"Erledigt","status_idle":"Geplant","covers_no_area":"Ohne Raum","contact_closed":"Geschlossen","contact_tilted":"Gekippt","contact_open":"Offen","contact_unknown":"Unbekannt","cond_op_above":"über","cond_op_below":"unter","cond_op_between":"zwischen","preflight_would_run":"Würde jetzt greifen","preflight_would_skip":"Würde jetzt übersprungen","preflight_unknown":"Nicht auswertbar","preflight_reason":"Blockiert durch: {reason}","preflight_partial":"{n} von {total} Rollos würden greifen","preflight_evaluated_at":"Live-Prüfung um {time}","preflight_and_more":"und {n} weitere","preflight_show_all":"Alle {n} Bedingungen anzeigen","preflight_only_if":"Nur wenn","preflight_would_block":"würde blockieren","cond_sum_entity_state":"{entity} ist {actual} (braucht {expected})","cond_sum_entity_state_not":"{entity} darf nicht {expected} sein","cond_sum_cover_position":"Position {actual}% (braucht {op} {value}%)","cond_sum_contact":"Kontakt ist {actual} (braucht {expected})","cond_sum_numeric":"{entity} = {actual} (braucht {op} {value})","cond_sum_sun_position":"Sonnenstand {actual} (Höhe {elev_req}, Richtung {az_req})","cond_sum_safety":"Fenster offen — Sicherheitsregel blockiert Schließen unter {ventilation}%","cond_sum_safety_clamp":"Fenster offen — schließt nur bis zur Lüftungsposition {ventilation}%","cond_sum_safety_ignore":"Fenster offen — Übersteuerung schließt trotzdem komplett","cond_sum_unavailable":"{entity} ist nicht verfügbar","cond_sum_position_unknown":"Aktuelle Position des Rollos ist unbekannt","cond_sum_no_contact":"Kein Fensterkontakt für dieses Rollo hinterlegt","cond_sum_no_facade":"Keine Fassadenrichtung für dieses Rollo hinterlegt","cond_sum_automation_disabled":"Automatik ist deaktiviert","cond_sum_invalid":"Ungültige Bedingung","today_legend_executed":"ausgeführt","today_legend_will_run":"läuft noch","today_legend_would_skip":"würde überspringen","today_legend_skipped":"übersprungen","today_legend_partial":"teilweise OK","today_legend_retry":"Wiederholungsfenster","reason_entity_unavailable":"Entität {entity} war nicht verfügbar — zur Sicherheit wurde nichts bewegt","reason_trigger_passed":"Auslösezeit war bereits vorbei (z. B. Neustart oder Neuberechnung nach der geplanten Zeit)","reason_waiting_facade":"Wartet, bis die Sonne diese Fassade erreicht","reason_no_facade":"Keine Ausrichtung für dieses Cover hinterlegt","reason_sun_not_reaching":"Die Sonne erreicht diese Fassade heute nicht","reason_already_at":"Bereits auf {pos}% — Bewegungen unter {delta}% werden zum Schutz des Motors übersprungen","reason_safety_clamped":"Fenster offen — auf Lüftungsposition {ventilation}% gestoppt; schließt vollständig, wenn das Fenster im Nachlauf-Fenster geschlossen wird","reason_service_failed":"Home-Assistant-Serviceaufruf fehlgeschlagen: {error}","reason_master_off":"Der Automatik-Hauptschalter war ausgeschaltet","reason_cover_off":"Die Automatik ist für dieses Cover deaktiviert","reason_removed":"Das Cover oder Szenario wurde aus der Konfiguration entfernt","card_state_active":"Aktiv","card_state_off":"Aus","card_state_waiting":"Wartet","card_next_up":"Als Nächstes","card_in_h_min":"in {h} h {m} min","card_in_h":"in {h} h","card_in_min":"in {m} min","card_now":"jetzt","card_covers_target":"{n} Rollos → {pos}","card_covers_target_one":"1 Rollo → {pos}","card_nothing_more":"Heute nichts mehr geplant","card_nothing_more_hint":"{done} von {total} Läufen sind durch.","card_no_plan":"Heute nichts geplant","card_no_plan_hint":"Für heute ist kein Szenario eingeplant.","card_off_title":"Automatik ist aus","card_off_hint":"Nichts läuft von selbst. Manuelles Ausführen geht weiter.","card_action_run":"Jetzt ausführen","card_action_run_confirm":"Jetzt ausführen?","card_action_run_force":"Jetzt erzwingen?","card_action_disable":"Automatik pausieren","card_action_enable":"Einschalten","card_last_run":"Zuletzt","card_waiting":"{name} wartet bis {time} auf seine Bedingungen","card_trigger_fixed_time":"Feste Uhrzeit","card_trigger_sunrise":"Sonnenaufgang","card_trigger_sunset":"Sonnenuntergang","card_trigger_solar_noon":"Sonnenhöchststand","card_trigger_sun_azimuth":"Sonnenrichtung","card_trigger_sun_elevation":"Sonnenhöhe","card_timeline_title":"Tagesverlauf","card_timeline_empty":"Heute löst kein Szenario aus.","card_runs_count":"{n} Läufe","card_runs_count_one":"1 Lauf","card_retry_until":"Nachlauf bis {time}","card_covers_title":"Rollos","card_covers_empty":"Noch keine Rollos angelegt.","card_cover_next":"{time} → {pos} %","card_cover_waiting":"wartet bis {time}","card_cover_idle":"nichts geplant","card_cover_auto_off":"Automatik aus","card_cover_unavailable":"Nicht verfügbar","card_cover_window_open":"Fenster offen","card_cover_window_tilted":"Fenster gekippt","card_cover_open":"{name} öffnen","card_cover_stop":"{name} stoppen","card_cover_close":"{name} schließen","card_scenarios_title":"Szenarien","card_scenarios_empty":"Noch keine Szenarien angelegt.","card_scn_today":"Heute {time}","card_scn_not_today":"Heute nicht geplant","card_scn_disabled":"Deaktiviert","card_scn_no_covers":"Keine Rollos zugewiesen","card_scn_run":"{name} ausführen","card_scn_confirm":"Ausführen?","card_scn_confirm_force":"Erzwingen?","card_cancel":"Abbrechen","card_run_nothing":"Nichts zu tun","card_open_panel":"Advanced Cover öffnen","card_pick_entry":"Mehrere Advanced-Cover-Einträge — wähle einen in den Karteneinstellungen.","card_no_entry":"Advanced Cover ist nicht eingerichtet.","card_loading":"Lädt…","card_ed_title":"Advanced-Cover-Karte","card_ed_entry":"Eintrag","card_ed_entry_auto":"Automatisch","card_ed_card_title":"Titel","card_ed_header":"Kopfzeile anzeigen","card_ed_compact":"Kompaktes Layout","card_ed_compact_help":"Eine Kachelzeile mit dem nächsten Lauf statt der Bereiche.","card_ed_sections":"Bereiche","card_ed_sections_help":"Wähle, was die Karte zeigt und in welcher Reihenfolge.","card_ed_sec_next":"Als Nächstes","card_ed_sec_next_help":"Das nächste Szenario mit Countdown und Live-Check.","card_ed_sec_timeline":"Tagesverlauf","card_ed_sec_timeline_help":"Die heutigen Läufe auf dem Tag-Nacht-Band.","card_ed_sec_covers":"Rollos","card_ed_sec_covers_help":"Position, Fensterkontakt und Steuerung je Rollo.","card_ed_sec_scenarios":"Szenarien","card_ed_sec_scenarios_help":"Einzelne Szenarien von Hand ausführen.","card_ed_move_up":"Nach oben","card_ed_move_down":"Nach unten","card_ed_next_run":"Knopf „Jetzt ausführen“","card_ed_next_toggle":"Knopf Automatik an/aus","card_ed_last_run":"Letzten Lauf anzeigen","card_ed_tl_list":"Heutige Läufe auflisten","card_ed_tl_legend":"Legende anzeigen","card_ed_covers_which":"Angezeigte Rollos","card_ed_scn_which":"Angezeigte Szenarien","card_ed_all":"Alle","card_ed_pick":"Auswahl","card_ed_group_area":"Nach Raum gruppieren","card_ed_controls":"Knöpfe Auf, Stopp und Zu","card_ed_confirm":"Vor dem Ausführen nachfragen","card_ed_ignore":"Bedingungen ignorieren","card_ed_ignore_help":"Manuelle Läufe übergehen die Bedingungen des Szenarios. Die Sicherheitsregel am Fenster gilt weiter."},"en":{"status_planned":"Planned","status_executed":"Executed","status_skipped":"Skipped","status_armed":"Waiting","status_expired":"Expired","status_blocked_safety":"Blocked","status_unavailable":"Unavailable","status_done":"Done","status_idle":"Planned","covers_no_area":"No area","contact_closed":"Closed","contact_tilted":"Tilted","contact_open":"Open","contact_unknown":"Unknown","cond_op_above":"above","cond_op_below":"below","cond_op_between":"between","preflight_would_run":"Would run now","preflight_would_skip":"Would be skipped now","preflight_unknown":"Cannot be evaluated","preflight_reason":"Blocked by: {reason}","preflight_partial":"{n} of {total} covers would run","preflight_evaluated_at":"Live check at {time}","preflight_and_more":"and {n} more","preflight_show_all":"Show all {n} conditions","preflight_only_if":"Only if","preflight_would_block":"would block","cond_sum_entity_state":"{entity} is {actual} (needs {expected})","cond_sum_entity_state_not":"{entity} must not be {expected}","cond_sum_cover_position":"Position {actual}% (needs {op} {value}%)","cond_sum_contact":"Contact is {actual} (needs {expected})","cond_sum_numeric":"{entity} = {actual} (needs {op} {value})","cond_sum_sun_position":"Sun at {actual} (height {elev_req}, direction {az_req})","cond_sum_safety":"Window open — safety rule blocks closing below {ventilation}%","cond_sum_safety_clamp":"Window open — will only close down to the {ventilation}% ventilation position","cond_sum_safety_ignore":"Window open — override closes fully anyway","cond_sum_unavailable":"{entity} is unavailable","cond_sum_position_unknown":"Current cover position is unknown","cond_sum_no_contact":"No window contact configured for this cover","cond_sum_no_facade":"No facade direction configured for this cover","cond_sum_automation_disabled":"Automation is disabled","cond_sum_invalid":"Invalid condition","today_legend_executed":"executed","today_legend_will_run":"will run","today_legend_would_skip":"would skip","today_legend_skipped":"skipped","today_legend_partial":"partly OK","today_legend_retry":"retry window","reason_entity_unavailable":"Entity {entity} was unavailable — nothing was moved for safety","reason_trigger_passed":"Trigger time had already passed (e.g. restart or recalculation after the planned time)","reason_waiting_facade":"Waiting until the sun reaches this facade","reason_no_facade":"No facade direction set for this cover","reason_sun_not_reaching":"The sun does not reach this facade today","reason_already_at":"Already at {pos}% — moves smaller than {delta}% are skipped to protect the motor","reason_safety_clamped":"Window open — stopped at the ventilation position {ventilation}%; closes fully if the window is shut within the re-arm window","reason_service_failed":"Home Assistant service call failed: {error}","reason_master_off":"The automation master switch was off","reason_cover_off":"Automation is switched off for this cover","reason_removed":"The cover or scenario was removed from the configuration","card_state_active":"Active","card_state_off":"Off","card_state_waiting":"Waiting","card_next_up":"Next up","card_in_h_min":"in {h} h {m} min","card_in_h":"in {h} h","card_in_min":"in {m} min","card_now":"now","card_covers_target":"{n} covers → {pos}","card_covers_target_one":"1 cover → {pos}","card_nothing_more":"Nothing else planned today","card_nothing_more_hint":"{done} of {total} runs are through.","card_no_plan":"Nothing planned today","card_no_plan_hint":"No scenario is scheduled for today.","card_off_title":"Automation is off","card_off_hint":"Nothing runs on its own. Manual runs still work.","card_action_run":"Run now","card_action_run_confirm":"Run now?","card_action_run_force":"Force now?","card_action_disable":"Pause automation","card_action_enable":"Switch on","card_last_run":"Last","card_waiting":"{name} waits for its conditions until {time}","card_trigger_fixed_time":"Fixed time","card_trigger_sunrise":"Sunrise","card_trigger_sunset":"Sunset","card_trigger_solar_noon":"Solar noon","card_trigger_sun_azimuth":"Sun direction","card_trigger_sun_elevation":"Sun elevation","card_timeline_title":"Today","card_timeline_empty":"No scenario fires today.","card_runs_count":"{n} runs","card_runs_count_one":"1 run","card_retry_until":"retries until {time}","card_covers_title":"Covers","card_covers_empty":"No covers set up yet.","card_cover_next":"{time} → {pos} %","card_cover_waiting":"waits until {time}","card_cover_idle":"nothing planned","card_cover_auto_off":"automation off","card_cover_unavailable":"Unavailable","card_cover_window_open":"Window open","card_cover_window_tilted":"Window tilted","card_cover_open":"Open {name}","card_cover_stop":"Stop {name}","card_cover_close":"Close {name}","card_scenarios_title":"Scenarios","card_scenarios_empty":"No scenarios set up yet.","card_scn_today":"Today {time}","card_scn_not_today":"Not scheduled today","card_scn_disabled":"Disabled","card_scn_no_covers":"No covers assigned","card_scn_run":"Run {name}","card_scn_confirm":"Run?","card_scn_confirm_force":"Force?","card_cancel":"Cancel","card_run_nothing":"Nothing to do","card_open_panel":"Open Advanced Cover","card_pick_entry":"Several Advanced Cover entries — pick one in the card settings.","card_no_entry":"Advanced Cover is not set up.","card_loading":"Loading…","card_ed_title":"Advanced Cover card","card_ed_entry":"Entry","card_ed_entry_auto":"Automatic","card_ed_card_title":"Title","card_ed_header":"Show header","card_ed_compact":"Compact layout","card_ed_compact_help":"One tile-style row with the next run instead of the sections.","card_ed_sections":"Sections","card_ed_sections_help":"Pick what the card shows and in which order.","card_ed_sec_next":"Next up","card_ed_sec_next_help":"The next scenario with countdown and live check.","card_ed_sec_timeline":"Day timeline","card_ed_sec_timeline_help":"Today's runs on the day and night strip.","card_ed_sec_covers":"Covers","card_ed_sec_covers_help":"Position, window contact and controls per cover.","card_ed_sec_scenarios":"Scenarios","card_ed_sec_scenarios_help":"Run single scenarios by hand.","card_ed_move_up":"Move up","card_ed_move_down":"Move down","card_ed_next_run":"“Run now” button","card_ed_next_toggle":"Automation on/off button","card_ed_last_run":"Show the last run","card_ed_tl_list":"List today's runs","card_ed_tl_legend":"Show the legend","card_ed_covers_which":"Covers to list","card_ed_scn_which":"Scenarios to list","card_ed_all":"All","card_ed_pick":"Pick","card_ed_group_area":"Group by area","card_ed_controls":"Open, stop and close buttons","card_ed_confirm":"Ask before running","card_ed_ignore":"Ignore conditions","card_ed_ignore_help":"Manual runs skip the scenario's conditions. The window safety rule still applies."},"nl":{"status_planned":"Gepland","status_executed":"Uitgevoerd","status_skipped":"Overgeslagen","status_armed":"Wachten","status_expired":"Verlopen","status_blocked_safety":"Geblokkeerd","status_unavailable":"Niet beschikbaar","status_done":"Klaar","status_idle":"Gepland","covers_no_area":"Geen ruimte","contact_closed":"Gesloten","contact_tilted":"Gekanteld","contact_open":"Open","contact_unknown":"Onbekend","cond_op_above":"boven","cond_op_below":"onder","cond_op_between":"tussen","preflight_would_run":"Zou nu uitvoeren","preflight_would_skip":"Zou nu worden overgeslagen","preflight_unknown":"Kan niet worden geëvalueerd","preflight_reason":"Geblokkeerd door: {reason}","preflight_partial":"{n} van {total} covers zouden uitvoeren","preflight_evaluated_at":"Live controle op {time}","preflight_and_more":"en {n} meer","preflight_show_all":"Toon alle {n} voorwaarden","preflight_only_if":"Alleen als","preflight_would_block":"zou blokkeren","cond_sum_entity_state":"{entity} is {actual} (moet {expected} zijn)","cond_sum_entity_state_not":"{entity} mag niet {expected} zijn","cond_sum_cover_position":"Positie {actual}% (moet {op} {value}% zijn)","cond_sum_contact":"Contact is {actual} (moet {expected} zijn)","cond_sum_numeric":"{entity} = {actual} (moet {op} {value} zijn)","cond_sum_sun_position":"Zon op {actual} (hoogte {elev_req}, richting {az_req})","cond_sum_safety":"Raam open — veiligheidsregel blokkeert sluiten onder {ventilation}%","cond_sum_safety_clamp":"Raam open — sluit alleen omlaag tot de {ventilation}% ventilatiepositie","cond_sum_safety_ignore":"Raam open — overschrijving sluit toch volledig","cond_sum_unavailable":"{entity} is niet beschikbaar","cond_sum_position_unknown":"Huidige coverpositie is onbekend","cond_sum_no_contact":"Geen raamcontact geconfigureerd voor deze cover","cond_sum_no_facade":"Geen gevelrichting geconfigureerd voor deze cover","cond_sum_automation_disabled":"Automatisering is uitgeschakeld","cond_sum_invalid":"Ongeldige voorwaarde","today_legend_executed":"uitgevoerd","today_legend_will_run":"zal uitvoeren","today_legend_would_skip":"zou overslaan","today_legend_skipped":"overgeslagen","today_legend_partial":"deels OK","today_legend_retry":"herkansingsvenster","reason_entity_unavailable":"Entiteit {entity} was niet beschikbaar — niets werd voor veiligheid verplaatst","reason_trigger_passed":"Trigger-moment was al voorbij (bijv. herstart of herberekening na het geplande moment)","reason_waiting_facade":"Wachten tot de zon deze gevel bereikt","reason_no_facade":"Geen gevelrichting ingesteld voor deze cover","reason_sun_not_reaching":"De zon bereikt deze gevel vandaag niet","reason_already_at":"Al op {pos}% — bewegingen kleiner dan {delta}% worden overgeslagen om de motor te beschermen","reason_safety_clamped":"Raam open — gestopt op ventilatiepositie {ventilation}%; sluit volledig als het raam binnen het re-arm venster wordt gesloten","reason_service_failed":"Home Assistant service call mislukt: {error}","reason_master_off":"De automatisering hoofdschakelaar was uit","reason_cover_off":"Automatisering is voor deze cover uitgeschakeld","reason_removed":"De cover of het scenario werd uit de configuratie verwijderd","card_state_active":"Actief","card_state_off":"Uit","card_state_waiting":"Wacht","card_next_up":"Volgende","card_in_h_min":"over {h} u {m} min","card_in_h":"over {h} u","card_in_min":"over {m} min","card_now":"nu","card_covers_target":"{n} covers → {pos}","card_covers_target_one":"1 cover → {pos}","card_nothing_more":"Vandaag niets meer gepland","card_nothing_more_hint":"{done} van {total} runs zijn klaar.","card_no_plan":"Vandaag niets gepland","card_no_plan_hint":"Voor vandaag is geen scenario ingepland.","card_off_title":"Automatisering staat uit","card_off_hint":"Niets loopt vanzelf. Handmatig uitvoeren werkt nog.","card_action_run":"Nu uitvoeren","card_action_run_confirm":"Nu uitvoeren?","card_action_run_force":"Nu forceren?","card_action_disable":"Automatisering pauzeren","card_action_enable":"Inschakelen","card_last_run":"Laatste","card_waiting":"{name} wacht tot {time} op zijn voorwaarden","card_trigger_fixed_time":"Vaste tijd","card_trigger_sunrise":"Zonsopkomst","card_trigger_sunset":"Zonsondergang","card_trigger_solar_noon":"Zonnemiddag","card_trigger_sun_azimuth":"Zonrichting","card_trigger_sun_elevation":"Zonhoogte","card_timeline_title":"Vandaag","card_timeline_empty":"Vandaag start geen scenario.","card_runs_count":"{n} runs","card_runs_count_one":"1 run","card_retry_until":"herhaalt tot {time}","card_covers_title":"Covers","card_covers_empty":"Nog geen covers ingesteld.","card_cover_next":"{time} → {pos} %","card_cover_waiting":"wacht tot {time}","card_cover_idle":"niets gepland","card_cover_auto_off":"automatisering uit","card_cover_unavailable":"Niet beschikbaar","card_cover_window_open":"Raam open","card_cover_window_tilted":"Raam gekanteld","card_cover_open":"{name} openen","card_cover_stop":"{name} stoppen","card_cover_close":"{name} sluiten","card_scenarios_title":"Scenario's","card_scenarios_empty":"Nog geen scenario's ingesteld.","card_scn_today":"Vandaag {time}","card_scn_not_today":"Vandaag niet gepland","card_scn_disabled":"Uitgeschakeld","card_scn_no_covers":"Geen covers toegewezen","card_scn_run":"{name} uitvoeren","card_scn_confirm":"Uitvoeren?","card_scn_confirm_force":"Forceren?","card_cancel":"Annuleren","card_run_nothing":"Niets te doen","card_open_panel":"Advanced Cover openen","card_pick_entry":"Meerdere Advanced Cover-items — kies er een in de kaartinstellingen.","card_no_entry":"Advanced Cover is niet ingesteld.","card_loading":"Laden…","card_ed_title":"Advanced Cover-kaart","card_ed_entry":"Item","card_ed_entry_auto":"Automatisch","card_ed_card_title":"Titel","card_ed_header":"Koptekst tonen","card_ed_compact":"Compacte weergave","card_ed_compact_help":"Eén tegelrij met de volgende run in plaats van de secties.","card_ed_sections":"Secties","card_ed_sections_help":"Kies wat de kaart toont en in welke volgorde.","card_ed_sec_next":"Volgende","card_ed_sec_next_help":"Het volgende scenario met aftelling en live-check.","card_ed_sec_timeline":"Dagtijdlijn","card_ed_sec_timeline_help":"De runs van vandaag op de dag-nachtbalk.","card_ed_sec_covers":"Covers","card_ed_sec_covers_help":"Positie, raamcontact en bediening per cover.","card_ed_sec_scenarios":"Scenario's","card_ed_sec_scenarios_help":"Losse scenario's handmatig uitvoeren.","card_ed_move_up":"Omhoog","card_ed_move_down":"Omlaag","card_ed_next_run":"Knop ‘Nu uitvoeren’","card_ed_next_toggle":"Knop automatisering aan/uit","card_ed_last_run":"Laatste run tonen","card_ed_tl_list":"Runs van vandaag tonen","card_ed_tl_legend":"Legenda tonen","card_ed_covers_which":"Getoonde covers","card_ed_scn_which":"Getoonde scenario's","card_ed_all":"Alle","card_ed_pick":"Selectie","card_ed_group_area":"Groeperen per ruimte","card_ed_controls":"Knoppen open, stop en dicht","card_ed_confirm":"Vragen voor het uitvoeren","card_ed_ignore":"Voorwaarden negeren","card_ed_ignore_help":"Handmatige runs slaan de voorwaarden van het scenario over. De veiligheidsregel voor het raam blijft gelden."}};
+var translations = {"de":{"errors_request_failed":"Anfrage fehlgeschlagen","status_planned":"Geplant","status_executed":"Ausgeführt","status_skipped":"Übersprungen","status_armed":"Wartet","status_expired":"Abgelaufen","status_blocked_safety":"Blockiert","status_unavailable":"Nicht verfügbar","status_done":"Erledigt","status_idle":"Geplant","covers_no_area":"Ohne Raum","contact_closed":"Geschlossen","contact_tilted":"Gekippt","contact_open":"Offen","contact_unknown":"Unbekannt","cond_op_above":"über","cond_op_below":"unter","cond_op_between":"zwischen","preflight_would_run":"Würde jetzt greifen","preflight_would_skip":"Würde jetzt übersprungen","preflight_unknown":"Nicht auswertbar","preflight_reason":"Blockiert durch: {reason}","preflight_partial":"{n} von {total} Rollos würden greifen","preflight_evaluated_at":"Live-Prüfung um {time}","preflight_and_more":"und {n} weitere","preflight_show_all":"Alle {n} Bedingungen anzeigen","preflight_only_if":"Nur wenn","preflight_would_block":"würde blockieren","cond_sum_entity_state":"{entity} ist {actual} (braucht {expected})","cond_sum_entity_state_not":"{entity} darf nicht {expected} sein","cond_sum_cover_position":"Position {actual}% (braucht {op} {value}%)","cond_sum_contact":"Kontakt ist {actual} (braucht {expected})","cond_sum_numeric":"{entity} = {actual} (braucht {op} {value})","cond_sum_sun_position":"Sonnenstand {actual} (Höhe {elev_req}, Richtung {az_req})","cond_sum_safety":"Fenster offen — Sicherheitsregel blockiert Schließen unter {ventilation}%","cond_sum_safety_clamp":"Fenster offen — schließt nur bis zur Lüftungsposition {ventilation}%","cond_sum_safety_ignore":"Fenster offen — Übersteuerung schließt trotzdem komplett","cond_sum_unavailable":"{entity} ist nicht verfügbar","cond_sum_position_unknown":"Aktuelle Position des Rollos ist unbekannt","cond_sum_no_contact":"Kein Fensterkontakt für dieses Rollo hinterlegt","cond_sum_no_facade":"Keine Fassadenrichtung für dieses Rollo hinterlegt","cond_sum_automation_disabled":"Automatik ist deaktiviert","cond_sum_invalid":"Ungültige Bedingung","today_legend_executed":"ausgeführt","today_legend_will_run":"läuft noch","today_legend_would_skip":"würde überspringen","today_legend_skipped":"übersprungen","today_legend_partial":"teilweise OK","today_legend_retry":"Wiederholungsfenster","reason_entity_unavailable":"Entität {entity} war nicht verfügbar — zur Sicherheit wurde nichts bewegt","reason_trigger_passed":"Auslösezeit war bereits vorbei (z. B. Neustart oder Neuberechnung nach der geplanten Zeit)","reason_waiting_facade":"Wartet, bis die Sonne diese Fassade erreicht","reason_no_facade":"Keine Ausrichtung für dieses Cover hinterlegt","reason_sun_not_reaching":"Die Sonne erreicht diese Fassade heute nicht","reason_already_at":"Bereits auf {pos}% — Bewegungen unter {delta}% werden zum Schutz des Motors übersprungen","reason_safety_clamped":"Fenster offen — auf Lüftungsposition {ventilation}% gestoppt; schließt vollständig, wenn das Fenster im Nachlauf-Fenster geschlossen wird","reason_service_failed":"Home-Assistant-Serviceaufruf fehlgeschlagen: {error}","reason_master_off":"Der Automatik-Hauptschalter war ausgeschaltet","reason_cover_off":"Die Automatik ist für dieses Cover deaktiviert","reason_removed":"Das Cover oder Szenario wurde aus der Konfiguration entfernt","card_state_active":"Aktiv","card_state_off":"Aus","card_state_waiting":"Wartet","card_next_up":"Als Nächstes","card_in_h_min":"in {h} h {m} min","card_in_h":"in {h} h","card_in_min":"in {m} min","card_now":"jetzt","card_covers_target":"{n} Rollos → {pos}","card_covers_target_one":"1 Rollo → {pos}","card_nothing_more":"Heute nichts mehr geplant","card_nothing_more_hint":"{done} von {total} Läufen sind durch.","card_no_plan":"Heute nichts geplant","card_no_plan_hint":"Für heute ist kein Szenario eingeplant.","card_off_title":"Automatik ist aus","card_off_hint":"Nichts läuft von selbst. Manuelles Ausführen geht weiter.","card_action_run":"Jetzt ausführen","card_action_run_confirm":"Jetzt ausführen?","card_action_run_force":"Jetzt erzwingen?","card_action_disable":"Automatik pausieren","card_action_enable":"Einschalten","card_last_run":"Zuletzt","card_waiting":"{name} wartet bis {time} auf seine Bedingungen","card_trigger_fixed_time":"Feste Uhrzeit","card_trigger_sunrise":"Sonnenaufgang","card_trigger_sunset":"Sonnenuntergang","card_trigger_solar_noon":"Sonnenhöchststand","card_trigger_sun_azimuth":"Sonnenrichtung","card_trigger_sun_elevation":"Sonnenhöhe","card_timeline_empty":"Heute löst kein Szenario aus.","card_retry_until":"Nachlauf bis {time}","card_covers_empty":"Noch keine Rollos angelegt.","card_cover_next":"{time} → {pos} %","card_cover_waiting":"wartet bis {time}","card_cover_idle":"nichts geplant","card_cover_auto_off":"Automatik aus","card_cover_unavailable":"Nicht verfügbar","card_cover_window_open":"Fenster offen","card_cover_window_tilted":"Fenster gekippt","card_cover_open":"{name} öffnen","card_cover_stop":"{name} stoppen","card_cover_close":"{name} schließen","card_scenarios_empty":"Noch keine Szenarien angelegt.","card_scn_today":"Heute {time}","card_scn_not_today":"Heute nicht geplant","card_scn_disabled":"Deaktiviert","card_scn_no_covers":"Keine Rollos zugewiesen","card_scn_run":"{name} ausführen","card_scn_confirm":"Ausführen?","card_scn_confirm_force":"Erzwingen?","card_cancel":"Abbrechen","card_run_nothing":"Nichts zu tun","card_open_panel":"Advanced Cover öffnen","card_pick_entry":"Mehrere Advanced-Cover-Einträge — wähle einen in den Karteneinstellungen.","card_no_entry":"Advanced Cover ist nicht eingerichtet.","card_loading":"Lädt…","card_ed_title":"Advanced-Cover-Karte","card_ed_entry":"Eintrag","card_ed_entry_auto":"Automatisch","card_ed_card_title":"Titel","card_ed_header":"Kopfzeile anzeigen","card_ed_compact":"Kompaktes Layout","card_ed_compact_help":"Eine Kachelzeile mit dem nächsten Lauf statt der Bereiche.","card_ed_sections":"Bereiche","card_ed_sections_help":"Wähle, was die Karte zeigt und in welcher Reihenfolge.","card_ed_sec_next":"Als Nächstes","card_ed_sec_next_help":"Das nächste Szenario mit Countdown und Live-Check.","card_ed_sec_timeline":"Tagesverlauf","card_ed_sec_timeline_help":"Die heutigen Läufe auf dem Tag-Nacht-Band.","card_ed_sec_covers":"Rollos","card_ed_sec_covers_help":"Position, Fensterkontakt und Steuerung je Rollo.","card_ed_sec_scenarios":"Szenarien","card_ed_sec_scenarios_help":"Einzelne Szenarien von Hand ausführen.","card_ed_move_up":"Nach oben","card_ed_move_down":"Nach unten","card_ed_next_run":"Knopf „Jetzt ausführen“","card_ed_next_toggle":"Knopf Automatik an/aus","card_ed_last_run":"Letzten Lauf anzeigen","card_ed_tl_list":"Heutige Läufe auflisten","card_ed_tl_legend":"Legende anzeigen","card_ed_covers_which":"Angezeigte Rollos","card_ed_scn_which":"Angezeigte Szenarien","card_ed_all":"Alle","card_ed_pick":"Auswahl","card_ed_group_area":"Nach Raum gruppieren","card_ed_controls":"Knöpfe Auf, Stopp und Zu","card_ed_confirm":"Vor dem Ausführen nachfragen","card_ed_ignore":"Bedingungen ignorieren","card_ed_ignore_help":"Manuelle Läufe übergehen die Bedingungen des Szenarios. Die Sicherheitsregel am Fenster gilt weiter.","card_master_info":"Automatik-Schalter anzeigen","card_ed_runs":"Manuelle Läufe","card_ed_runs_help":"Gilt für jeden Ausführen-Knopf der Karte.","card_ed_entry_gone":"{id} (existiert nicht mehr)"},"en":{"errors_request_failed":"Request failed","status_planned":"Planned","status_executed":"Executed","status_skipped":"Skipped","status_armed":"Waiting","status_expired":"Expired","status_blocked_safety":"Blocked","status_unavailable":"Unavailable","status_done":"Done","status_idle":"Planned","covers_no_area":"No area","contact_closed":"Closed","contact_tilted":"Tilted","contact_open":"Open","contact_unknown":"Unknown","cond_op_above":"above","cond_op_below":"below","cond_op_between":"between","preflight_would_run":"Would run now","preflight_would_skip":"Would be skipped now","preflight_unknown":"Cannot be evaluated","preflight_reason":"Blocked by: {reason}","preflight_partial":"{n} of {total} covers would run","preflight_evaluated_at":"Live check at {time}","preflight_and_more":"and {n} more","preflight_show_all":"Show all {n} conditions","preflight_only_if":"Only if","preflight_would_block":"would block","cond_sum_entity_state":"{entity} is {actual} (needs {expected})","cond_sum_entity_state_not":"{entity} must not be {expected}","cond_sum_cover_position":"Position {actual}% (needs {op} {value}%)","cond_sum_contact":"Contact is {actual} (needs {expected})","cond_sum_numeric":"{entity} = {actual} (needs {op} {value})","cond_sum_sun_position":"Sun at {actual} (height {elev_req}, direction {az_req})","cond_sum_safety":"Window open — safety rule blocks closing below {ventilation}%","cond_sum_safety_clamp":"Window open — will only close down to the {ventilation}% ventilation position","cond_sum_safety_ignore":"Window open — override closes fully anyway","cond_sum_unavailable":"{entity} is unavailable","cond_sum_position_unknown":"Current cover position is unknown","cond_sum_no_contact":"No window contact configured for this cover","cond_sum_no_facade":"No facade direction configured for this cover","cond_sum_automation_disabled":"Automation is disabled","cond_sum_invalid":"Invalid condition","today_legend_executed":"executed","today_legend_will_run":"will run","today_legend_would_skip":"would skip","today_legend_skipped":"skipped","today_legend_partial":"partly OK","today_legend_retry":"retry window","reason_entity_unavailable":"Entity {entity} was unavailable — nothing was moved for safety","reason_trigger_passed":"Trigger time had already passed (e.g. restart or recalculation after the planned time)","reason_waiting_facade":"Waiting until the sun reaches this facade","reason_no_facade":"No facade direction set for this cover","reason_sun_not_reaching":"The sun does not reach this facade today","reason_already_at":"Already at {pos}% — moves smaller than {delta}% are skipped to protect the motor","reason_safety_clamped":"Window open — stopped at the ventilation position {ventilation}%; closes fully if the window is shut within the re-arm window","reason_service_failed":"Home Assistant service call failed: {error}","reason_master_off":"The automation master switch was off","reason_cover_off":"Automation is switched off for this cover","reason_removed":"The cover or scenario was removed from the configuration","card_state_active":"Active","card_state_off":"Off","card_state_waiting":"Waiting","card_next_up":"Next up","card_in_h_min":"in {h} h {m} min","card_in_h":"in {h} h","card_in_min":"in {m} min","card_now":"now","card_covers_target":"{n} covers → {pos}","card_covers_target_one":"1 cover → {pos}","card_nothing_more":"Nothing else planned today","card_nothing_more_hint":"{done} of {total} runs are through.","card_no_plan":"Nothing planned today","card_no_plan_hint":"No scenario is scheduled for today.","card_off_title":"Automation is off","card_off_hint":"Nothing runs on its own. Manual runs still work.","card_action_run":"Run now","card_action_run_confirm":"Run now?","card_action_run_force":"Force now?","card_action_disable":"Pause automation","card_action_enable":"Switch on","card_last_run":"Last","card_waiting":"{name} waits for its conditions until {time}","card_trigger_fixed_time":"Fixed time","card_trigger_sunrise":"Sunrise","card_trigger_sunset":"Sunset","card_trigger_solar_noon":"Solar noon","card_trigger_sun_azimuth":"Sun direction","card_trigger_sun_elevation":"Sun elevation","card_timeline_empty":"No scenario fires today.","card_retry_until":"retries until {time}","card_covers_empty":"No covers set up yet.","card_cover_next":"{time} → {pos} %","card_cover_waiting":"waits until {time}","card_cover_idle":"nothing planned","card_cover_auto_off":"automation off","card_cover_unavailable":"Unavailable","card_cover_window_open":"Window open","card_cover_window_tilted":"Window tilted","card_cover_open":"Open {name}","card_cover_stop":"Stop {name}","card_cover_close":"Close {name}","card_scenarios_empty":"No scenarios set up yet.","card_scn_today":"Today {time}","card_scn_not_today":"Not scheduled today","card_scn_disabled":"Disabled","card_scn_no_covers":"No covers assigned","card_scn_run":"Run {name}","card_scn_confirm":"Run?","card_scn_confirm_force":"Force?","card_cancel":"Cancel","card_run_nothing":"Nothing to do","card_open_panel":"Open Advanced Cover","card_pick_entry":"Several Advanced Cover entries — pick one in the card settings.","card_no_entry":"Advanced Cover is not set up.","card_loading":"Loading…","card_ed_title":"Advanced Cover card","card_ed_entry":"Entry","card_ed_entry_auto":"Automatic","card_ed_card_title":"Title","card_ed_header":"Show header","card_ed_compact":"Compact layout","card_ed_compact_help":"One tile-style row with the next run instead of the sections.","card_ed_sections":"Sections","card_ed_sections_help":"Pick what the card shows and in which order.","card_ed_sec_next":"Next up","card_ed_sec_next_help":"The next scenario with countdown and live check.","card_ed_sec_timeline":"Day timeline","card_ed_sec_timeline_help":"Today's runs on the day and night strip.","card_ed_sec_covers":"Covers","card_ed_sec_covers_help":"Position, window contact and controls per cover.","card_ed_sec_scenarios":"Scenarios","card_ed_sec_scenarios_help":"Run single scenarios by hand.","card_ed_move_up":"Move up","card_ed_move_down":"Move down","card_ed_next_run":"“Run now” button","card_ed_next_toggle":"Automation on/off button","card_ed_last_run":"Show the last run","card_ed_tl_list":"List today's runs","card_ed_tl_legend":"Show the legend","card_ed_covers_which":"Covers to list","card_ed_scn_which":"Scenarios to list","card_ed_all":"All","card_ed_pick":"Pick","card_ed_group_area":"Group by area","card_ed_controls":"Open, stop and close buttons","card_ed_confirm":"Ask before running","card_ed_ignore":"Ignore conditions","card_ed_ignore_help":"Manual runs skip the scenario's conditions. The window safety rule still applies.","card_master_info":"Show the automation switch","card_ed_runs":"Manual runs","card_ed_runs_help":"Applies to every run button on the card.","card_ed_entry_gone":"{id} (no longer exists)"},"nl":{"errors_request_failed":"Aanvraag mislukt","status_planned":"Gepland","status_executed":"Uitgevoerd","status_skipped":"Overgeslagen","status_armed":"Wachten","status_expired":"Verlopen","status_blocked_safety":"Geblokkeerd","status_unavailable":"Niet beschikbaar","status_done":"Klaar","status_idle":"Gepland","covers_no_area":"Geen ruimte","contact_closed":"Gesloten","contact_tilted":"Gekanteld","contact_open":"Open","contact_unknown":"Onbekend","cond_op_above":"boven","cond_op_below":"onder","cond_op_between":"tussen","preflight_would_run":"Zou nu uitvoeren","preflight_would_skip":"Zou nu worden overgeslagen","preflight_unknown":"Kan niet worden geëvalueerd","preflight_reason":"Geblokkeerd door: {reason}","preflight_partial":"{n} van {total} covers zouden uitvoeren","preflight_evaluated_at":"Live controle op {time}","preflight_and_more":"en {n} meer","preflight_show_all":"Toon alle {n} voorwaarden","preflight_only_if":"Alleen als","preflight_would_block":"zou blokkeren","cond_sum_entity_state":"{entity} is {actual} (moet {expected} zijn)","cond_sum_entity_state_not":"{entity} mag niet {expected} zijn","cond_sum_cover_position":"Positie {actual}% (moet {op} {value}% zijn)","cond_sum_contact":"Contact is {actual} (moet {expected} zijn)","cond_sum_numeric":"{entity} = {actual} (moet {op} {value} zijn)","cond_sum_sun_position":"Zon op {actual} (hoogte {elev_req}, richting {az_req})","cond_sum_safety":"Raam open — veiligheidsregel blokkeert sluiten onder {ventilation}%","cond_sum_safety_clamp":"Raam open — sluit alleen omlaag tot de {ventilation}% ventilatiepositie","cond_sum_safety_ignore":"Raam open — overschrijving sluit toch volledig","cond_sum_unavailable":"{entity} is niet beschikbaar","cond_sum_position_unknown":"Huidige coverpositie is onbekend","cond_sum_no_contact":"Geen raamcontact geconfigureerd voor deze cover","cond_sum_no_facade":"Geen gevelrichting geconfigureerd voor deze cover","cond_sum_automation_disabled":"Automatisering is uitgeschakeld","cond_sum_invalid":"Ongeldige voorwaarde","today_legend_executed":"uitgevoerd","today_legend_will_run":"zal uitvoeren","today_legend_would_skip":"zou overslaan","today_legend_skipped":"overgeslagen","today_legend_partial":"deels OK","today_legend_retry":"herkansingsvenster","reason_entity_unavailable":"Entiteit {entity} was niet beschikbaar — niets werd voor veiligheid verplaatst","reason_trigger_passed":"Trigger-moment was al voorbij (bijv. herstart of herberekening na het geplande moment)","reason_waiting_facade":"Wachten tot de zon deze gevel bereikt","reason_no_facade":"Geen gevelrichting ingesteld voor deze cover","reason_sun_not_reaching":"De zon bereikt deze gevel vandaag niet","reason_already_at":"Al op {pos}% — bewegingen kleiner dan {delta}% worden overgeslagen om de motor te beschermen","reason_safety_clamped":"Raam open — gestopt op ventilatiepositie {ventilation}%; sluit volledig als het raam binnen het re-arm venster wordt gesloten","reason_service_failed":"Home Assistant service call mislukt: {error}","reason_master_off":"De automatisering hoofdschakelaar was uit","reason_cover_off":"Automatisering is voor deze cover uitgeschakeld","reason_removed":"De cover of het scenario werd uit de configuratie verwijderd","card_state_active":"Actief","card_state_off":"Uit","card_state_waiting":"Wacht","card_next_up":"Volgende","card_in_h_min":"over {h} u {m} min","card_in_h":"over {h} u","card_in_min":"over {m} min","card_now":"nu","card_covers_target":"{n} covers → {pos}","card_covers_target_one":"1 cover → {pos}","card_nothing_more":"Vandaag niets meer gepland","card_nothing_more_hint":"{done} van {total} runs zijn klaar.","card_no_plan":"Vandaag niets gepland","card_no_plan_hint":"Voor vandaag is geen scenario ingepland.","card_off_title":"Automatisering staat uit","card_off_hint":"Niets loopt vanzelf. Handmatig uitvoeren werkt nog.","card_action_run":"Nu uitvoeren","card_action_run_confirm":"Nu uitvoeren?","card_action_run_force":"Nu forceren?","card_action_disable":"Automatisering pauzeren","card_action_enable":"Inschakelen","card_last_run":"Laatste","card_waiting":"{name} wacht tot {time} op zijn voorwaarden","card_trigger_fixed_time":"Vaste tijd","card_trigger_sunrise":"Zonsopkomst","card_trigger_sunset":"Zonsondergang","card_trigger_solar_noon":"Zonnemiddag","card_trigger_sun_azimuth":"Zonrichting","card_trigger_sun_elevation":"Zonhoogte","card_timeline_empty":"Vandaag start geen scenario.","card_retry_until":"herhaalt tot {time}","card_covers_empty":"Nog geen covers ingesteld.","card_cover_next":"{time} → {pos} %","card_cover_waiting":"wacht tot {time}","card_cover_idle":"niets gepland","card_cover_auto_off":"automatisering uit","card_cover_unavailable":"Niet beschikbaar","card_cover_window_open":"Raam open","card_cover_window_tilted":"Raam gekanteld","card_cover_open":"{name} openen","card_cover_stop":"{name} stoppen","card_cover_close":"{name} sluiten","card_scenarios_empty":"Nog geen scenario's ingesteld.","card_scn_today":"Vandaag {time}","card_scn_not_today":"Vandaag niet gepland","card_scn_disabled":"Uitgeschakeld","card_scn_no_covers":"Geen covers toegewezen","card_scn_run":"{name} uitvoeren","card_scn_confirm":"Uitvoeren?","card_scn_confirm_force":"Forceren?","card_cancel":"Annuleren","card_run_nothing":"Niets te doen","card_open_panel":"Advanced Cover openen","card_pick_entry":"Meerdere Advanced Cover-items — kies er een in de kaartinstellingen.","card_no_entry":"Advanced Cover is niet ingesteld.","card_loading":"Laden…","card_ed_title":"Advanced Cover-kaart","card_ed_entry":"Item","card_ed_entry_auto":"Automatisch","card_ed_card_title":"Titel","card_ed_header":"Koptekst tonen","card_ed_compact":"Compacte weergave","card_ed_compact_help":"Eén tegelrij met de volgende run in plaats van de secties.","card_ed_sections":"Secties","card_ed_sections_help":"Kies wat de kaart toont en in welke volgorde.","card_ed_sec_next":"Volgende","card_ed_sec_next_help":"Het volgende scenario met aftelling en live-check.","card_ed_sec_timeline":"Dagtijdlijn","card_ed_sec_timeline_help":"De runs van vandaag op de dag-nachtbalk.","card_ed_sec_covers":"Covers","card_ed_sec_covers_help":"Positie, raamcontact en bediening per cover.","card_ed_sec_scenarios":"Scenario's","card_ed_sec_scenarios_help":"Losse scenario's handmatig uitvoeren.","card_ed_move_up":"Omhoog","card_ed_move_down":"Omlaag","card_ed_next_run":"Knop ‘Nu uitvoeren’","card_ed_next_toggle":"Knop automatisering aan/uit","card_ed_last_run":"Laatste run tonen","card_ed_tl_list":"Runs van vandaag tonen","card_ed_tl_legend":"Legenda tonen","card_ed_covers_which":"Getoonde covers","card_ed_scn_which":"Getoonde scenario's","card_ed_all":"Alle","card_ed_pick":"Selectie","card_ed_group_area":"Groeperen per ruimte","card_ed_controls":"Knoppen open, stop en dicht","card_ed_confirm":"Vragen voor het uitvoeren","card_ed_ignore":"Voorwaarden negeren","card_ed_ignore_help":"Handmatige runs slaan de voorwaarden van het scenario over. De veiligheidsregel voor het raam blijft gelden.","card_master_info":"Automatiseringsschakelaar tonen","card_ed_runs":"Handmatige runs","card_ed_runs_help":"Geldt voor elke uitvoerknop op de kaart.","card_ed_entry_gone":"{id} (bestaat niet meer)"}};
 
 const PREFIX = `component.${TRANSLATION_DOMAIN}.config_panel.`;
 function language(hass) {
@@ -676,10 +684,13 @@ const time = (iso) => {
 };
 /** Stable key of one plan block (same shape the panel uses). */
 const occKey = (occ) => `${occ.scenario_id}@${occ.planned_at}`;
-/** The next block that has not fired yet, or null when the day is done. */
+/** The next block that has not fired yet, or null when the day is done.
+
+    A block without covers moves nothing, so it is not "next" (the backend's
+    next-run sensor skips it too). */
 function nextUp(plan, nowMs) {
     const upcoming = plan
-        .filter((occ) => !occ.fired && time(occ.planned_at) >= nowMs)
+        .filter((occ) => !occ.fired && occ.assignments.length > 0 && time(occ.planned_at) >= nowMs)
         .sort((a, b) => time(a.planned_at) - time(b.planned_at));
     return upcoming[0] ?? null;
 }
@@ -690,9 +701,13 @@ function lastRun(plan) {
         .sort((a, b) => time(b.planned_at) - time(a.planned_at));
     return fired[0] ?? null;
 }
-/** Blocks with a run that fired but still waits for its conditions. */
-function waitingRuns(plan) {
-    return plan.filter((occ) => occ.fired && occ.assignments.some((run) => run.status === "armed"));
+/** Blocks with a run that fired but still waits for its conditions.
+
+    A facade-relative scenario also keeps covers armed — until the sun reaches
+    their side. That is a cover waiting for its turn, not for a condition. */
+function waitingRuns(plan, nowMs) {
+    return plan.filter((occ) => occ.fired &&
+        occ.assignments.some((run) => run.status === "armed" && !(run.fire_at && time(run.fire_at) > nowMs)));
 }
 /** Whole hours and minutes until `targetMs`; never negative. */
 function leadTime(targetMs, nowMs) {
@@ -740,12 +755,13 @@ function groupByArea(covers) {
 /** Per-result counts of a manual run, read back from the action log.
 
     A manual run answers with a bare "ok"; what each cover did only shows up
-    as log entries. Everything logged for the scenario since `sinceMs` is
-    that run. */
+    as log entries. Everything logged for the scenario after `sinceMs` is
+    that run. `sinceMs` must be on the server's clock — the log is stamped
+    there, and a browser a few seconds off would miss or over-count. */
 function runResultCounts(log, scenarioId, sinceMs) {
     const counts = new Map();
     for (const entry of log) {
-        if (entry.scenario_id !== scenarioId || time(entry.time) < sinceMs)
+        if (entry.scenario_id !== scenarioId || time(entry.time) <= sinceMs)
             continue;
         counts.set(entry.result, (counts.get(entry.result) ?? 0) + 1);
     }
@@ -873,6 +889,13 @@ const cardStyles = i$3 `
     height: 6px;
     border-radius: 50%;
     background: currentColor;
+  }
+  button.pill {
+    border: none;
+    font-family: inherit;
+  }
+  button.pill:hover {
+    filter: brightness(1.15);
   }
   .pill.pri {
     background: var(--ac-tint);
@@ -1272,10 +1295,12 @@ const cardStyles = i$3 `
     color: var(--ac-fg);
   }
   .feedback {
-    display: flex;
+    margin-top: 10px;
+  }
+  .results {
+    display: inline-flex;
     flex-wrap: wrap;
     gap: 6px;
-    margin-top: 10px;
   }
 
   /* ---- timeline -------------------------------------------------------- */
@@ -1856,12 +1881,14 @@ function validateConfig(config) {
     }
 }
 
-/** Options that only mean something while their section is on the card. */
+/** Options that only mean something while their section is on the card.
+    `confirm_run` and `ignore_conditions` are not among them: they govern
+    every run button — the next section's and the compact tile's too. */
 const SECTION_KEYS = {
     next: ["next_actions", "show_last_run"],
     timeline: ["timeline_list", "timeline_legend"],
     covers: ["covers", "group_by_area", "cover_controls"],
-    scenarios: ["scenarios", "confirm_run", "ignore_conditions"],
+    scenarios: ["scenarios"],
 };
 class AdvancedCoverCardEditor extends i {
     constructor() {
@@ -1916,8 +1943,10 @@ class AdvancedCoverCardEditor extends i {
         this._teardown();
         this._subscribedEntry = entry;
         this._snapshot = undefined;
-        this._unsubscribe = subscribeSnapshot(this.hass, (snapshot) => {
-            this._snapshot = snapshot;
+        this._unsubscribe = subscribeSnapshot(this.hass, (message) => {
+            // An unloaded entry only costs the pickers their chips.
+            if (!("unloaded" in message))
+                this._snapshot = message;
         }, this._config?.entry_id);
         // Without an entry the pickers simply stay empty; no retry loop.
         this._unsubscribe?.catch(() => {
@@ -1993,29 +2022,13 @@ class AdvancedCoverCardEditor extends i {
       <div class="wrap">
         <div class="etitle">${this._t("card_ed_title")}</div>
 
-        ${this._entries.length > 1
-            ? b `
-              <div class="flabel">${this._t("card_ed_entry")}</div>
-              <select
-                class="input"
-                .value=${this._config.entry_id ?? ""}
-                @change=${(ev) => this._emit({
-                entry_id: ev.target.value || undefined,
-            })}
-              >
-                <option value="">${this._t("card_ed_entry_auto")}</option>
-                ${this._entries.map((entry) => b `<option
-                      value=${entry.entry_id}
-                      ?selected=${entry.entry_id === this._config?.entry_id}
-                    >
-                      ${entry.name}
-                    </option>`)}
-              </select>
-            `
-            : A}
+        ${this._renderEntryPicker()}
 
-        <div class="flabel">${this._t("card_ed_card_title")}</div>
+        <label class="flabel" for="ac-title"
+          >${this._t("card_ed_card_title")}</label
+        >
         <input
+          id="ac-title"
           class="input"
           type="text"
           .value=${this._config.title ?? ""}
@@ -2025,7 +2038,7 @@ class AdvancedCoverCardEditor extends i {
         })}
         />
 
-        ${this._toggleRow("card_ed_header", "show_header")}
+        ${cfg.compact ? A : this._toggleRow("card_ed_header", "show_header")}
         ${this._toggleRow("card_ed_compact", "compact", "card_ed_compact_help")}
 
         ${cfg.compact
@@ -2035,7 +2048,59 @@ class AdvancedCoverCardEditor extends i {
               <div class="fhelp bottom">${this._t("card_ed_sections_help")}</div>
               ${ordered.map((section) => this._renderSection(section))}
             `}
+        ${this._hasRunButton(cfg)
+            ? b `
+              <div class="flabel top strong">${this._t("card_ed_runs")}</div>
+              <div class="fhelp bottom">${this._t("card_ed_runs_help")}</div>
+              ${this._toggleRow("card_ed_confirm", "confirm_run")}
+              ${this._toggleRow("card_ed_ignore", "ignore_conditions", "card_ed_ignore_help")}
+            `
+            : A}
       </div>
+    `;
+    }
+    /** Whether the configured card shows any button that runs a scenario. */
+    _hasRunButton(cfg) {
+        const sections = cfg.sections ?? DEFAULT_CONFIG.sections;
+        const nextRuns = (cfg.next_actions ?? DEFAULT_CONFIG.next_actions).includes("run");
+        if (cfg.compact)
+            return nextRuns;
+        return (sections.includes("scenarios") || (sections.includes("next") && nextRuns));
+    }
+    /** Offered with several entries — and with a configured entry that no
+        longer exists, which otherwise could only be cleared in YAML. */
+    _renderEntryPicker() {
+        const current = this._config?.entry_id ?? "";
+        const known = this._entries.some((entry) => entry.entry_id === current);
+        const gone = Boolean(current) && this._entriesLoaded && !known;
+        if (this._entries.length <= 1 && !gone)
+            return A;
+        return b `
+      <label class="flabel" for="ac-entry">${this._t("card_ed_entry")}</label>
+      <select
+        id="ac-entry"
+        class="input"
+        @change=${(ev) => this._emit({
+            entry_id: ev.target.value || undefined,
+        })}
+      >
+        <option value="" ?selected=${!current}>
+          ${this._t("card_ed_entry_auto")}
+        </option>
+        ${gone
+            ? b `<option value=${current} selected>
+              ${t(localizedHass(this.hass), "config_panel.card_ed_entry_gone", {
+                id: current,
+            })}
+            </option>`
+            : A}
+        ${this._entries.map((entry) => b `<option
+              value=${entry.entry_id}
+              ?selected=${entry.entry_id === current}
+            >
+              ${entry.name}
+            </option>`)}
+      </select>
     `;
     }
     _renderSection(section) {
@@ -2044,10 +2109,7 @@ class AdvancedCoverCardEditor extends i {
         const on = index >= 0;
         return b `<div class="sec ${on ? "on" : ""}">
       <div class="sec-row">
-        <ha-switch
-          .checked=${on}
-          @change=${(ev) => this._toggleSection(section, ev.target.checked)}
-        ></ha-switch>
+        ${this._switch(this._t(`card_ed_sec_${section}`), on, (next) => this._toggleSection(section, next))}
         <div class="sec-text">
           <div class="sec-name">${this._t(`card_ed_sec_${section}`)}</div>
           <div class="fhelp">${this._t(`card_ed_sec_${section}_help`)}</div>
@@ -2100,24 +2162,35 @@ class AdvancedCoverCardEditor extends i {
             default:
                 return b `
           ${this._picker("scenarios", "card_ed_scn_which", this._snapshot?.scenarios ?? [])}
-          ${this._toggleRow("card_ed_confirm", "confirm_run")}
-          ${this._toggleRow("card_ed_ignore", "ignore_conditions", "card_ed_ignore_help")}
         `;
         }
     }
+    /** A switch drawn by the editor itself. Deliberately not `ha-switch`:
+        that element lives in a lazily loaded chunk and may not be defined when
+        the dialog opens — and an element that keeps its own checked state
+        shows the wrong state once Lit reuses it for another row. */
+    _switch(label, checked, onChange) {
+        return b `<button
+      type="button"
+      class="toggle ${checked ? "on" : ""}"
+      role="switch"
+      aria-checked=${checked ? "true" : "false"}
+      aria-label=${label}
+      @click=${() => onChange(!checked)}
+    >
+      <span class="knob"></span>
+    </button>`;
+    }
     _switchRow(labelKey, checked, onChange, helpKey) {
-        return b `<label class="trow">
+        return b `<div class="trow">
       <span class="ttext">
         <span>${this._t(labelKey)}</span>
         ${helpKey
             ? b `<span class="fhelp">${this._t(helpKey)}</span>`
             : A}
       </span>
-      <ha-switch
-        .checked=${checked}
-        @change=${(ev) => onChange(ev.target.checked)}
-      ></ha-switch>
-    </label>`;
+      ${this._switch(this._t(labelKey), checked, onChange)}
+    </div>`;
     }
     _toggleRow(labelKey, key, helpKey) {
         return this._switchRow(labelKey, Boolean(this._cfg[key]), (on) => this._emit({ [key]: on }), helpKey);
@@ -2146,6 +2219,7 @@ class AdvancedCoverCardEditor extends i {
         <button
           type="button"
           class=${custom ? "" : "on"}
+          aria-pressed=${custom ? "false" : "true"}
           @click=${() => this._emit({ [key]: "all" })}
         >
           ${this._t("card_ed_all")}
@@ -2153,8 +2227,11 @@ class AdvancedCoverCardEditor extends i {
         <button
           type="button"
           class=${custom ? "on" : ""}
+          aria-pressed=${custom ? "true" : "false"}
+          ?disabled=${!custom && !items.length}
           @click=${() => {
-            if (!custom) {
+            // Nothing to pick from (yet): an empty list would empty the card.
+            if (!custom && items.length) {
                 this._emit({
                     [key]: items.map((item) => item.id),
                 });
@@ -2169,6 +2246,7 @@ class AdvancedCoverCardEditor extends i {
             ${items.map((item) => b `<button
                   type="button"
                   class="chip ${picked.includes(item.id) ? "on" : ""}"
+                  aria-pressed=${picked.includes(item.id) ? "true" : "false"}
                   @click=${() => toggle(item.id)}
                 >
                   ${item.name}
@@ -2196,6 +2274,7 @@ class AdvancedCoverCardEditor extends i {
       margin-bottom: 12px;
     }
     .flabel {
+      display: block;
       font-size: 12.5px;
       color: var(--secondary-text-color);
       margin: 12px 0 6px;
@@ -2246,7 +2325,47 @@ class AdvancedCoverCardEditor extends i {
       align-items: center;
       gap: 12px;
       padding: 9px 0;
-      cursor: pointer;
+    }
+    .toggle {
+      position: relative;
+      flex: none;
+      width: 38px;
+      height: 22px;
+      padding: 0;
+      border: none;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--primary-text-color) 28%, transparent);
+      transition: background 0.15s ease;
+    }
+    .toggle .knob {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+      transition: left 0.15s ease;
+    }
+    .toggle.on {
+      background: var(--primary-color);
+    }
+    .toggle.on .knob {
+      left: 18px;
+    }
+    .toggle:focus-visible,
+    .seg button:focus-visible,
+    .chip:focus-visible,
+    .order button:focus-visible {
+      outline: 2px solid var(--primary-color);
+      outline-offset: 2px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .toggle,
+      .toggle .knob {
+        transition: none;
+      }
     }
     .ttext {
       flex: 1;
@@ -2353,8 +2472,17 @@ const WIDE_PX = 720;
 const CONFIRM_MS = 5000;
 /** How long the result of a manual run stays on screen. */
 const FEEDBACK_MS = 9000;
+/** How long a rejected action stays on screen. */
+const ERROR_MS = 8000;
 /** Repaint interval for the countdown and the timeline's now-line. */
 const TICK_MS = 30000;
+/** Subscription retries back off from the first to the second value. */
+const RETRY_MIN_MS = 2000;
+const RETRY_MAX_MS = 60000;
+/** Failed subscriptions in a row after which the last snapshot is dropped:
+    long enough to ride out a reload or restart, short enough not to show a
+    day that is no longer true. */
+const STALE_AFTER_FAILURES = 4;
 const VERDICT_ICONS = {
     would_run: "mdi:play-circle-outline",
     would_skip: "mdi:debug-step-over",
@@ -2372,7 +2500,8 @@ const COVER_ICONS = {
         open: "mdi:arrow-expand-horizontal",
         close: "mdi:arrow-collapse-horizontal",
     },
-    awning: { open: "mdi:arrow-collapse-up", close: "mdi:arrow-expand-down" },
+    // Home Assistant's convention: an awning is "open" when it is extended.
+    awning: { open: "mdi:arrow-expand-down", close: "mdi:arrow-collapse-up" },
 };
 const DEFAULT_COVER_ICONS = { open: "mdi:arrow-up", close: "mdi:arrow-down" };
 function triggerMeta(trigger) {
@@ -2396,9 +2525,23 @@ function triggerMeta(trigger) {
 class AdvancedCoverCard extends i {
     constructor() {
         super(...arguments);
+        /** Keys of the controls whose request is in flight. Per control on
+            purpose: a slow move must never grey out another cover's Stop. */
+        this._busy = new Set();
         this._narrow = false;
         this._stack = false;
         this._wide = false;
+        /** Bumped on every teardown, so a late answer to an old attempt is ignored. */
+        this._generation = 0;
+        this._retryDelay = RETRY_MIN_MS;
+        this._failures = 0;
+        /** A reconnect (Home Assistant restarted, network came back): the old
+            subscription died with the old socket. */
+        this._onReconnect = () => {
+            this._teardown();
+            this._retryDelay = RETRY_MIN_MS;
+            this._subscribe();
+        };
     }
     static { this.properties = {
         hass: { attribute: false },
@@ -2431,7 +2574,7 @@ class AdvancedCoverCard extends i {
             this._snapshot = undefined;
             this._selected = undefined;
         }
-        this._resubscribe();
+        this._subscribe();
     }
     /** Rough height in HA's 50 px card units, so masonry can place the card. */
     getCardSize() {
@@ -2463,27 +2606,63 @@ class AdvancedCoverCard extends i {
     }
     connectedCallback() {
         super.connectedCallback();
-        this._resubscribe();
+        this._subscribe();
         this._observeWidth();
         this._ticker = window.setInterval(() => this.requestUpdate(), TICK_MS);
     }
     disconnectedCallback() {
         super.disconnectedCallback();
         this._teardown();
+        this._watched?.removeEventListener?.("ready", this._onReconnect);
+        this._watched = undefined;
         window.clearInterval(this._ticker);
         window.clearTimeout(this._confirmTimer);
         window.clearTimeout(this._feedbackTimer);
+        window.clearTimeout(this._errorTimer);
+        // The timers are gone, so what they would have ended must end here: a
+        // card that is moved in the DOM may not come back with "Run?" still armed.
+        this._confirm = undefined;
+        this._feedback = undefined;
+        this._actionError = undefined;
         this._resizeObserver?.disconnect();
         this._resizeObserver = undefined;
     }
-    updated() {
-        if (this.hass && !this._unsubscribe) {
-            this._resubscribe();
+    /** `hass` is replaced on every state change anywhere in Home Assistant;
+        repaint only when something the card shows has changed with it. */
+    shouldUpdate(changed) {
+        if (changed.size !== 1 || !changed.has("hass"))
+            return true;
+        const previous = changed.get("hass");
+        const hass = this.hass;
+        const snap = this._snapshot;
+        if (!previous || !hass || !snap)
+            return true;
+        if (previous.localize !== hass.localize ||
+            previous.locale !== hass.locale ||
+            previous.language !== hass.language ||
+            previous.areas !== hass.areas ||
+            previous.user !== hass.user ||
+            previous.connection !== hass.connection ||
+            previous.themes?.darkMode !== hass.themes?.darkMode) {
+            return true;
+        }
+        const cfg = this._cfg;
+        if (cfg.compact || !cfg.sections.includes("covers"))
+            return false;
+        return snap.covers.some((cover) => previous.states[cover.entity_id] !== hass.states[cover.entity_id]);
+    }
+    updated(changed) {
+        if (this.hass && !this._unsubscribe && this._retryTimer === undefined) {
+            this._subscribe();
         }
         this.toggleAttribute("data-narrow", this._narrow);
         this.toggleAttribute("data-stack", this._stack);
         this.toggleAttribute("data-wide", this._wide);
         this.toggleAttribute("data-dark", Boolean(this.hass?.themes?.darkMode));
+        if (changed.has("_confirm") && this._confirm) {
+            // Arming swaps the play button for "Run?"; keep the keyboard on it.
+            this.renderRoot.querySelector("[data-confirm]")?.focus();
+        }
     }
     get _cfg() {
         return { ...DEFAULT_CONFIG, ...(this._config ?? { type: "" }) };
@@ -2510,46 +2689,110 @@ class AdvancedCoverCard extends i {
     }
     // ---- data ---------------------------------------------------------------
     _teardown() {
+        this._generation += 1;
         this._unsubscribe?.then((unsub) => unsub()).catch(() => undefined);
         this._unsubscribe = undefined;
         this._subscribedEntry = undefined;
+        window.clearTimeout(this._retryTimer);
+        this._retryTimer = undefined;
     }
-    _resubscribe() {
+    _watchConnection() {
+        const connection = this.hass?.connection;
+        if (connection === this._watched)
+            return;
+        this._watched?.removeEventListener?.("ready", this._onReconnect);
+        this._watched = connection;
+        connection?.addEventListener?.("ready", this._onReconnect);
+    }
+    _scheduleRetry() {
+        window.clearTimeout(this._retryTimer);
+        this._retryTimer = window.setTimeout(() => {
+            this._retryTimer = undefined;
+            this._subscribe();
+        }, this._retryDelay);
+        this._retryDelay = Math.min(this._retryDelay * 2, RETRY_MAX_MS);
+    }
+    _subscribe() {
         if (!this.hass || !this._config || !this.isConnected)
             return;
+        this._watchConnection();
         const entry = this._config.entry_id ?? "";
-        if (this._unsubscribe && this._subscribedEntry === entry)
+        // Subscribed, or waiting for the next attempt at exactly this entry.
+        if (this._subscribedEntry === entry &&
+            (this._unsubscribe || this._retryTimer !== undefined)) {
             return;
+        }
         this._teardown();
-        const pending = subscribeSnapshot(this.hass, (snapshot) => {
-            this._snapshot = snapshot;
+        const generation = this._generation;
+        const pending = subscribeSnapshot(this.hass, (message) => {
+            if (generation !== this._generation)
+                return;
+            if ("unloaded" in message) {
+                // The entry was unloaded (a reload, usually): keep the last day on
+                // screen and come back for the new one.
+                this._teardown();
+                this._subscribedEntry = entry;
+                this._retryDelay = RETRY_MIN_MS;
+                this._scheduleRetry();
+                return;
+            }
+            this._snapshot = message;
             this._error = undefined;
+            this._failures = 0;
+            this._retryDelay = RETRY_MIN_MS;
         }, this._config.entry_id);
         if (!pending)
             return;
         this._subscribedEntry = entry;
         this._unsubscribe = pending;
         pending.catch((err) => {
+            if (generation !== this._generation)
+                return;
             this._unsubscribe = undefined;
-            // "Nothing configured" and "several entries, pick one" need different
-            // answers from the user, so they get different sentences.
-            this._error = this._t(err?.code === "ambiguous_entry" ? "card_pick_entry" : "card_no_entry");
+            this._failures += 1;
+            // A stale day is fine for a moment (restart, reload), not for long.
+            if (!this._snapshot || this._failures >= STALE_AFTER_FAILURES) {
+                this._snapshot = undefined;
+                // "Nothing configured" and "several entries, pick one" need
+                // different answers from the user, so they get different sentences.
+                this._error = this._t(err?.code === "ambiguous_entry" ? "card_pick_entry" : "card_no_entry");
+            }
+            // Never on every repaint: a card that cannot subscribe would otherwise
+            // send one request per state change in the whole house.
+            this._scheduleRetry();
         });
     }
     // ---- actions ------------------------------------------------------------
+    _isBusy(key) {
+        return this._busy.has(key);
+    }
+    _showActionError(text) {
+        this._actionError = text;
+        window.clearTimeout(this._errorTimer);
+        if (text) {
+            this._errorTimer = window.setTimeout(() => {
+                this._actionError = undefined;
+            }, ERROR_MS);
+        }
+    }
+    /** Run one request; resolves to whether it went through. */
     async _act(key, request) {
-        if (!this.hass || this._busy)
-            return;
-        this._busy = key;
-        this._actionError = undefined;
+        if (!this.hass || this._busy.has(key))
+            return false;
+        this._busy = new Set(this._busy).add(key);
+        this._showActionError(undefined);
         try {
             await request();
+            return true;
         }
         catch (err) {
-            this._actionError = formatApiError(err, this._l);
+            this._showActionError(formatApiError(err, this._l));
+            return false;
         }
         finally {
-            this._busy = undefined;
+            const busy = new Set(this._busy);
+            busy.delete(key);
+            this._busy = busy;
         }
     }
     /** First tap arms the button, the second one runs — unless that is off. */
@@ -2570,10 +2813,12 @@ class AdvancedCoverCard extends i {
         this._confirm = undefined;
     }
     async _run(key, scenarioId) {
-        // The log is stamped with the server's clock; leave room for a skewed one.
-        const since = Date.now() - 2000;
-        await this._act(key, () => runScenario(this.hass, scenarioId, this._cfg.ignore_conditions, this._config?.entry_id));
-        if (this._actionError)
+        // The run's outcome is read back from the action log, which is stamped
+        // with the server's clock — so the "since" mark is the server's too: the
+        // time of the last snapshot, which is later than everything logged so far.
+        const since = this._snapshot ? new Date(this._snapshot.now).getTime() : 0;
+        const ran = await this._act(key, () => runScenario(this.hass, scenarioId, this._cfg.ignore_conditions, this._config?.entry_id));
+        if (!ran)
             return;
         this._feedback = { scenarioId, since };
         window.clearTimeout(this._feedbackTimer);
@@ -2629,21 +2874,33 @@ class AdvancedCoverCard extends i {
         return b `<ha-card>
       ${cfg.show_header ? this._renderHeader(snap) : A}
       ${this._actionError
-            ? b `<p class="error">${this._actionError}</p>`
+            ? b `<p class="error" role="alert">${this._actionError}</p>`
             : A}
       <div class="sections">
         ${sections.map((section) => b `<div class="sec sec-${section}">${renderers[section]()}</div>`)}
       </div>
     </ha-card>`;
     }
+    /** State of the automation; a tap opens the master switch, which is how
+        a card without the "next" section still lets you switch it. */
     _statePill(snap) {
-        if (!snap.enabled) {
-            return b `<span class="pill">${this._t("card_state_off")}</span>`;
+        const [tone, key] = !snap.enabled
+            ? ["", "card_state_off"]
+            : waitingRuns(snap.plan, Date.now()).length
+                ? ["warn", "card_state_waiting"]
+                : ["pri", "card_state_active"];
+        if (!snap.master_entity_id) {
+            return b `<span class="pill ${tone}">${this._t(key)}</span>`;
         }
-        if (waitingRuns(snap.plan).length) {
-            return b `<span class="pill warn">${this._t("card_state_waiting")}</span>`;
-        }
-        return b `<span class="pill pri">${this._t("card_state_active")}</span>`;
+        return b `<button
+      type="button"
+      class="pill ${tone}"
+      title=${this._t("card_master_info")}
+      aria-label="${this._t(key)} · ${this._t("card_master_info")}"
+      @click=${() => this._moreInfo(snap.master_entity_id)}
+    >
+      ${this._t(key)}
+    </button>`;
     }
     _renderHeader(snap) {
         return b `<div class="head ${snap.enabled ? "" : "off"}">
@@ -2714,30 +2971,59 @@ class AdvancedCoverCard extends i {
       <span>${this._t(`preflight_${verdict}`)}</span>
     </span>`;
     }
-    /** Per-cover outcome of the manual run that just finished. */
-    _renderFeedback(scenarioId) {
+    /** Per-result counts of the manual run that just finished, or null. */
+    _feedbackCounts(scenarioId) {
         const feedback = this._feedback;
         if (!feedback || feedback.scenarioId !== scenarioId || !this._snapshot) {
-            return A;
+            return null;
         }
-        const counts = runResultCounts(this._snapshot.log, scenarioId, feedback.since);
+        return runResultCounts(this._snapshot.log, scenarioId, feedback.since);
+    }
+    /** Per-cover outcome of the manual run that just finished. */
+    _renderFeedback(scenarioId) {
+        const counts = this._feedbackCounts(scenarioId);
+        if (!counts)
+            return A;
         if (!counts.length) {
-            return b `<span class="badge"
+            return b `<span class="badge" role="status"
         ><span>${this._t("card_run_nothing")}</span></span
       >`;
         }
-        return b `${counts.map(([result, n]) => b `<span class="badge ${result}"
-          ><span>${n}× ${this._t(`status_${result}`)}</span></span
-        >`)}`;
+        return b `<span class="results" role="status"
+      >${counts.map(([result, n]) => b `<span class="badge ${result}"
+            ><span>${n}× ${this._t(`status_${result}`)}</span></span
+          >`)}</span
+    >`;
+    }
+    /** The same outcome as one line of text, for the compact tile. */
+    _feedbackText(scenarioId) {
+        const counts = this._feedbackCounts(scenarioId);
+        if (!counts)
+            return null;
+        if (!counts.length)
+            return this._t("card_run_nothing");
+        return counts
+            .map(([result, n]) => `${n}× ${this._t(`status_${result}`)}`)
+            .join(" · ");
+    }
+    /** Status of one plan block in words (the timeline marker's label). */
+    _occStatusText(occ) {
+        if (occ.fired)
+            return this._t(`status_${occKind(occ)}`);
+        const verdict = occVerdict(occ);
+        return verdict === "would_run"
+            ? this._t("status_planned")
+            : this._t(`preflight_${verdict}`);
     }
     _runButton(key, scenarioId, label) {
         const armed = this._confirm === key;
-        const busy = this._busy === key;
+        const busy = this._isBusy(key);
         const confirmLabel = this._t(this._cfg.ignore_conditions ? "card_action_run_force" : "card_action_run_confirm");
         return b `<button
       type="button"
       class="btn ${armed ? "confirm" : "primary"}"
-      .disabled=${Boolean(this._busy)}
+      ?data-confirm=${armed}
+      .disabled=${busy}
       @click=${() => this._requestRun(key, scenarioId)}
     >
       <ha-icon
@@ -2783,29 +3069,28 @@ class AdvancedCoverCard extends i {
         }
         const actions = [];
         if (next && showRun) {
-            actions.push(this._runButton("next", next.scenario_id, this._t("card_action_run")));
+            actions.push(this._runButton(`next:${next.scenario_id}`, next.scenario_id, this._t("card_action_run")));
         }
         if (showToggle) {
             actions.push(b `<button
         type="button"
         class="btn ${snap.enabled ? "" : "primary"}"
-        .disabled=${Boolean(this._busy)}
+        .disabled=${this._isBusy("master")}
         @click=${this._toggleMaster}
       >
         <ha-icon icon=${snap.enabled ? "mdi:pause" : "mdi:power"}></ha-icon>
         ${this._t(snap.enabled ? "card_action_disable" : "card_action_enable")}
       </button>`);
         }
-        const waiting = snap.enabled ? waitingRuns(snap.plan) : [];
+        const waiting = snap.enabled ? waitingRuns(snap.plan, Date.now()) : [];
         const last = cfg.show_last_run ? lastRun(snap.plan) : null;
+        const feedback = next ? this._renderFeedback(next.scenario_id) : A;
         return b `
       <div class="next">
         <div class="next-main">
           ${main}
-          ${next
-            ? b `<div class="feedback">
-                ${this._renderFeedback(next.scenario_id)}
-              </div>`
+          ${feedback !== A
+            ? b `<div class="feedback">${feedback}</div>`
             : A}
         </div>
         ${actions.length
@@ -2887,7 +3172,8 @@ class AdvancedCoverCard extends i {
                 id: key,
                 minute,
                 colorClass: `${timelineClass(occ)}${this._selected === key ? " sel" : ""}`,
-                label: `${formatTime(occ.planned_at)} · ${occ.scenario_name}`,
+                // Colour alone does not tell a screen reader how the run went.
+                label: `${formatTime(occ.planned_at)} · ${occ.scenario_name} · ${this._occStatusText(occ)}`,
                 timeLabel: formatTime(occ.planned_at),
                 spanEndMinute: retrySpanEnd(occ),
                 onClick: () => this._select(key),
@@ -2963,11 +3249,12 @@ class AdvancedCoverCard extends i {
     }
     /** What one plan block does: targets, live check, and each cover's line. */
     _renderOccDetail(occ, solo) {
+        // The block's own conditions fail for every cover alike and are named
+        // once here; cover-scoped ones (window contact, position) are named on
+        // the line of the cover they stop.
         const reason = occ.fired
             ? occReasonSummary(this._l, occ)
-            : occVerdict(occ) === "would_run"
-                ? null
-                : preflightReason(this._l, occ.preflight);
+            : preflightReason(this._l, occ.preflight);
         const error = occ.fired &&
             occ.assignments.some((run) => ["blocked_safety", "unavailable"].includes(run.result ?? ""));
         return b `<div class="detail ${solo ? "solo" : ""}">
@@ -3004,9 +3291,9 @@ class AdvancedCoverCard extends i {
     </div>`;
     }
     _renderRunLine(occ, run) {
-        // A block that would be skipped as a whole takes its covers with it,
-        // whatever their own checks say.
-        const block = occ.fired ? "would_run" : occVerdict(occ);
+        // A block whose own conditions fail takes every cover with it, whatever
+        // the cover's own checks say; otherwise each cover speaks for itself.
+        const block = occ.fired ? "would_run" : (occ.preflight?.verdict ?? "would_run");
         const kind = block === "would_run" ? runKind(occ, run) : block;
         let state = "";
         if (occ.fired) {
@@ -3103,6 +3390,17 @@ class AdvancedCoverCard extends i {
         if (!cover.enabled || !this._snapshot?.enabled) {
             parts.push(b `<span>${this._t("card_cover_auto_off")}</span>`);
         }
+        else if (next?.armed &&
+            next.fire_at &&
+            new Date(next.fire_at).getTime() > Date.now()) {
+            // Facade-relative scenario: armed, but simply for this cover's turn.
+            parts.push(b `<span title=${next.scenario_name}>
+        ${this._t("card_cover_next", {
+                time: formatTime(next.fire_at),
+                pos: next.position ?? 0,
+            })}
+      </span>`);
+        }
         else if (next?.armed) {
             parts.push(b `<span class="warn" title=${next.scenario_name}>
         <ha-icon icon="mdi:timer-sand"></ha-icon>
@@ -3122,7 +3420,7 @@ class AdvancedCoverCard extends i {
         else if (parts.length === 0) {
             parts.push(b `<span>${this._t("card_cover_idle")}</span>`);
         }
-        return b `<div class="cover-sub">${parts}</div>`;
+        return b `<span class="cover-sub">${parts}</span>`;
     }
     /** How much of the glyph the shade fills. An awning is the odd one out:
         "open" means extended, so its fabric grows with the position. */
@@ -3144,7 +3442,9 @@ class AdvancedCoverCard extends i {
         type="button"
         title=${this._t(`card_cover_${command}`, { name: cover.name })}
         aria-label=${this._t(`card_cover_${command}`, { name: cover.name })}
-        .disabled=${disabled || !live.available || Boolean(this._busy)}
+        .disabled=${disabled ||
+            !live.available ||
+            this._isBusy(`cover:${cover.id}:${command}`)}
         @click=${() => this._drive(cover, command)}
       >
         <ha-icon icon=${icon}></ha-icon>
@@ -3226,7 +3526,7 @@ class AdvancedCoverCard extends i {
         const trigger = triggerMeta(scenario.trigger);
         const occ = scenarioOccurrence(scenario, snap.plan);
         const armed = this._confirm === key;
-        const busy = this._busy === key;
+        const busy = this._isBusy(key);
         const feedback = this._renderFeedback(scenario.id);
         const count = scenario.cover_ids.length;
         const runLabel = this._t("card_scn_run", { name: scenario.name });
@@ -3239,7 +3539,7 @@ class AdvancedCoverCard extends i {
       >
         <ha-icon icon=${trigger.icon}></ha-icon>
       </span>
-      <span class="scn-text">
+      <div class="scn-text">
         <div class="scn-name ellipsis">${scenario.name}</div>
         <div class="scn-sub">
           ${feedback !== A
@@ -3250,12 +3550,13 @@ class AdvancedCoverCard extends i {
                 : this._t("card_scn_no_covers")}</span
                 >`}
         </div>
-      </span>
+      </div>
       ${armed
             ? b `<span class="scn-confirm">
             <button
               type="button"
               class="btn small confirm"
+              data-confirm
               @click=${() => this._requestRun(key, scenario.id)}
             >
               <ha-icon icon="mdi:check"></ha-icon>
@@ -3278,7 +3579,7 @@ class AdvancedCoverCard extends i {
             class="play"
             title=${runLabel}
             aria-label=${runLabel}
-            .disabled=${!count || Boolean(this._busy)}
+            .disabled=${!count || busy}
             @click=${() => this._requestRun(key, scenario.id)}
           >
             <ha-icon
@@ -3291,7 +3592,7 @@ class AdvancedCoverCard extends i {
     // ---- compact tile -------------------------------------------------------
     _renderCompact(snap) {
         const next = snap.enabled ? nextUp(snap.plan, Date.now()) : null;
-        const waiting = snap.enabled && waitingRuns(snap.plan).length > 0;
+        const waiting = snap.enabled && waitingRuns(snap.plan, Date.now()).length > 0;
         let sub;
         if (!snap.enabled) {
             sub = this._t("card_off_title");
@@ -3303,24 +3604,30 @@ class AdvancedCoverCard extends i {
             sub = this._t(snap.plan.length ? "card_nothing_more" : "card_no_plan");
         }
         const showRun = next && this._cfg.next_actions.includes("run");
-        const armed = this._confirm === "next";
+        const key = next ? `next:${next.scenario_id}` : "";
+        const armed = Boolean(next) && this._confirm === key;
+        const busy = this._isBusy(key);
+        const outcome = next ? this._feedbackText(next.scenario_id) : null;
         return b `<ha-card>
       <div class="tile ${snap.enabled ? (waiting ? "warn" : "") : "off"}">
         <span class="tile-icon">
           <ha-icon icon="mdi:window-shutter-cog"></ha-icon>
         </span>
-        <span class="tile-text">
+        <div class="tile-text">
           <div class="tile-title ellipsis">
             ${this._config?.title || snap.name}
           </div>
-          <div class="tile-sub ellipsis">${this._actionError ?? sub}</div>
-        </span>
+          <div class="tile-sub ellipsis" role="status">
+            ${this._actionError ?? outcome ?? sub}
+          </div>
+        </div>
         ${showRun
             ? armed
                 ? b `<button
                 type="button"
                 class="btn small confirm"
-                @click=${() => this._requestRun("next", next.scenario_id)}
+                data-confirm
+                @click=${() => this._requestRun(key, next.scenario_id)}
               >
                 <ha-icon icon="mdi:check"></ha-icon>
                 ${this._t(this._cfg.ignore_conditions
@@ -3332,12 +3639,12 @@ class AdvancedCoverCard extends i {
                 class="play"
                 title=${this._t("card_action_run")}
                 aria-label=${this._t("card_action_run")}
-                .disabled=${Boolean(this._busy)}
-                @click=${() => this._requestRun("next", next.scenario_id)}
+                .disabled=${busy}
+                @click=${() => this._requestRun(key, next.scenario_id)}
               >
                 <ha-icon
-                  class=${this._busy === "next" ? "spin" : ""}
-                  icon=${this._busy === "next" ? "mdi:loading" : "mdi:play"}
+                  class=${busy ? "spin" : ""}
+                  icon=${busy ? "mdi:loading" : "mdi:play"}
                 ></ha-icon>
               </button>`
             : this._statePill(snap)}

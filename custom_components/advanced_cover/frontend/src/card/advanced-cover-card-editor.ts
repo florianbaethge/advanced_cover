@@ -12,7 +12,7 @@ import {
   type AdvancedCoverCardConfig,
   type CardSection,
   type CardSnapshot,
-  type NextAction_,
+  type NextButton,
 } from "./types";
 
 type BoolKey = {
@@ -23,12 +23,14 @@ type BoolKey = {
     : never;
 }[keyof AdvancedCoverCardConfig];
 
-/** Options that only mean something while their section is on the card. */
+/** Options that only mean something while their section is on the card.
+    `confirm_run` and `ignore_conditions` are not among them: they govern
+    every run button — the next section's and the compact tile's too. */
 const SECTION_KEYS: Record<CardSection, Array<keyof AdvancedCoverCardConfig>> = {
   next: ["next_actions", "show_last_run"],
   timeline: ["timeline_list", "timeline_legend"],
   covers: ["covers", "group_by_area", "cover_controls"],
-  scenarios: ["scenarios", "confirm_run", "ignore_conditions"],
+  scenarios: ["scenarios"],
 };
 
 export class AdvancedCoverCardEditor extends LitElement {
@@ -99,8 +101,9 @@ export class AdvancedCoverCardEditor extends LitElement {
     this._snapshot = undefined;
     this._unsubscribe = subscribeSnapshot(
       this.hass,
-      (snapshot) => {
-        this._snapshot = snapshot;
+      (message) => {
+        // An unloaded entry only costs the pickers their chips.
+        if (!("unloaded" in message)) this._snapshot = message;
       },
       this._config?.entry_id
     );
@@ -180,33 +183,13 @@ export class AdvancedCoverCardEditor extends LitElement {
       <div class="wrap">
         <div class="etitle">${this._t("card_ed_title")}</div>
 
-        ${this._entries.length > 1
-          ? html`
-              <div class="flabel">${this._t("card_ed_entry")}</div>
-              <select
-                class="input"
-                .value=${this._config.entry_id ?? ""}
-                @change=${(ev: Event) =>
-                  this._emit({
-                    entry_id: (ev.target as HTMLSelectElement).value || undefined,
-                  })}
-              >
-                <option value="">${this._t("card_ed_entry_auto")}</option>
-                ${this._entries.map(
-                  (entry) =>
-                    html`<option
-                      value=${entry.entry_id}
-                      ?selected=${entry.entry_id === this._config?.entry_id}
-                    >
-                      ${entry.name}
-                    </option>`
-                )}
-              </select>
-            `
-          : nothing}
+        ${this._renderEntryPicker()}
 
-        <div class="flabel">${this._t("card_ed_card_title")}</div>
+        <label class="flabel" for="ac-title"
+          >${this._t("card_ed_card_title")}</label
+        >
         <input
+          id="ac-title"
           class="input"
           type="text"
           .value=${this._config.title ?? ""}
@@ -217,7 +200,7 @@ export class AdvancedCoverCardEditor extends LitElement {
             })}
         />
 
-        ${this._toggleRow("card_ed_header", "show_header")}
+        ${cfg.compact ? nothing : this._toggleRow("card_ed_header", "show_header")}
         ${this._toggleRow("card_ed_compact", "compact", "card_ed_compact_help")}
 
         ${cfg.compact
@@ -227,7 +210,71 @@ export class AdvancedCoverCardEditor extends LitElement {
               <div class="fhelp bottom">${this._t("card_ed_sections_help")}</div>
               ${ordered.map((section) => this._renderSection(section))}
             `}
+        ${this._hasRunButton(cfg)
+          ? html`
+              <div class="flabel top strong">${this._t("card_ed_runs")}</div>
+              <div class="fhelp bottom">${this._t("card_ed_runs_help")}</div>
+              ${this._toggleRow("card_ed_confirm", "confirm_run")}
+              ${this._toggleRow(
+                "card_ed_ignore",
+                "ignore_conditions",
+                "card_ed_ignore_help"
+              )}
+            `
+          : nothing}
       </div>
+    `;
+  }
+
+  /** Whether the configured card shows any button that runs a scenario. */
+  private _hasRunButton(cfg: AdvancedCoverCardConfig): boolean {
+    const sections = cfg.sections ?? DEFAULT_CONFIG.sections;
+    const nextRuns = (cfg.next_actions ?? DEFAULT_CONFIG.next_actions).includes(
+      "run"
+    );
+    if (cfg.compact) return nextRuns;
+    return (
+      sections.includes("scenarios") || (sections.includes("next") && nextRuns)
+    );
+  }
+
+  /** Offered with several entries — and with a configured entry that no
+      longer exists, which otherwise could only be cleared in YAML. */
+  private _renderEntryPicker(): TemplateResult | typeof nothing {
+    const current = this._config?.entry_id ?? "";
+    const known = this._entries.some((entry) => entry.entry_id === current);
+    const gone = Boolean(current) && this._entriesLoaded && !known;
+    if (this._entries.length <= 1 && !gone) return nothing;
+    return html`
+      <label class="flabel" for="ac-entry">${this._t("card_ed_entry")}</label>
+      <select
+        id="ac-entry"
+        class="input"
+        @change=${(ev: Event) =>
+          this._emit({
+            entry_id: (ev.target as HTMLSelectElement).value || undefined,
+          })}
+      >
+        <option value="" ?selected=${!current}>
+          ${this._t("card_ed_entry_auto")}
+        </option>
+        ${gone
+          ? html`<option value=${current} selected>
+              ${t(localizedHass(this.hass!), "config_panel.card_ed_entry_gone", {
+                id: current,
+              })}
+            </option>`
+          : nothing}
+        ${this._entries.map(
+          (entry) =>
+            html`<option
+              value=${entry.entry_id}
+              ?selected=${entry.entry_id === current}
+            >
+              ${entry.name}
+            </option>`
+        )}
+      </select>
     `;
   }
 
@@ -237,11 +284,9 @@ export class AdvancedCoverCardEditor extends LitElement {
     const on = index >= 0;
     return html`<div class="sec ${on ? "on" : ""}">
       <div class="sec-row">
-        <ha-switch
-          .checked=${on}
-          @change=${(ev: Event) =>
-            this._toggleSection(section, (ev.target as HTMLInputElement).checked)}
-        ></ha-switch>
+        ${this._switch(this._t(`card_ed_sec_${section}`), on, (next) =>
+          this._toggleSection(section, next)
+        )}
         <div class="sec-text">
           <div class="sec-name">${this._t(`card_ed_sec_${section}`)}</div>
           <div class="fhelp">${this._t(`card_ed_sec_${section}_help`)}</div>
@@ -303,14 +348,29 @@ export class AdvancedCoverCardEditor extends LitElement {
             "card_ed_scn_which",
             this._snapshot?.scenarios ?? []
           )}
-          ${this._toggleRow("card_ed_confirm", "confirm_run")}
-          ${this._toggleRow(
-            "card_ed_ignore",
-            "ignore_conditions",
-            "card_ed_ignore_help"
-          )}
         `;
     }
+  }
+
+  /** A switch drawn by the editor itself. Deliberately not `ha-switch`:
+      that element lives in a lazily loaded chunk and may not be defined when
+      the dialog opens — and an element that keeps its own checked state
+      shows the wrong state once Lit reuses it for another row. */
+  private _switch(
+    label: string,
+    checked: boolean,
+    onChange: (on: boolean) => void
+  ): TemplateResult {
+    return html`<button
+      type="button"
+      class="toggle ${checked ? "on" : ""}"
+      role="switch"
+      aria-checked=${checked ? "true" : "false"}
+      aria-label=${label}
+      @click=${() => onChange(!checked)}
+    >
+      <span class="knob"></span>
+    </button>`;
   }
 
   private _switchRow(
@@ -319,19 +379,15 @@ export class AdvancedCoverCardEditor extends LitElement {
     onChange: (on: boolean) => void,
     helpKey?: string
   ): TemplateResult {
-    return html`<label class="trow">
+    return html`<div class="trow">
       <span class="ttext">
         <span>${this._t(labelKey)}</span>
         ${helpKey
           ? html`<span class="fhelp">${this._t(helpKey)}</span>`
           : nothing}
       </span>
-      <ha-switch
-        .checked=${checked}
-        @change=${(ev: Event) =>
-          onChange((ev.target as HTMLInputElement).checked)}
-      ></ha-switch>
-    </label>`;
+      ${this._switch(this._t(labelKey), checked, onChange)}
+    </div>`;
   }
 
   private _toggleRow(
@@ -347,10 +403,10 @@ export class AdvancedCoverCardEditor extends LitElement {
     );
   }
 
-  private _nextActionRow(action: NextAction_, labelKey: string): TemplateResult {
+  private _nextActionRow(action: NextButton, labelKey: string): TemplateResult {
     const actions = this._cfg.next_actions;
     return this._switchRow(labelKey, actions.includes(action), (on) => {
-      const next = (["run", "toggle"] as NextAction_[]).filter((item) =>
+      const next = (["run", "toggle"] as NextButton[]).filter((item) =>
         item === action ? on : actions.includes(item)
       );
       this._emit({ next_actions: next });
@@ -378,6 +434,7 @@ export class AdvancedCoverCardEditor extends LitElement {
         <button
           type="button"
           class=${custom ? "" : "on"}
+          aria-pressed=${custom ? "false" : "true"}
           @click=${() =>
             this._emit({ [key]: "all" } as Partial<AdvancedCoverCardConfig>)}
         >
@@ -386,8 +443,11 @@ export class AdvancedCoverCardEditor extends LitElement {
         <button
           type="button"
           class=${custom ? "on" : ""}
+          aria-pressed=${custom ? "true" : "false"}
+          ?disabled=${!custom && !items.length}
           @click=${() => {
-            if (!custom) {
+            // Nothing to pick from (yet): an empty list would empty the card.
+            if (!custom && items.length) {
               this._emit({
                 [key]: items.map((item) => item.id),
               } as Partial<AdvancedCoverCardConfig>);
@@ -404,6 +464,7 @@ export class AdvancedCoverCardEditor extends LitElement {
                 html`<button
                   type="button"
                   class="chip ${picked.includes(item.id) ? "on" : ""}"
+                  aria-pressed=${picked.includes(item.id) ? "true" : "false"}
                   @click=${() => toggle(item.id)}
                 >
                   ${item.name}
@@ -433,6 +494,7 @@ export class AdvancedCoverCardEditor extends LitElement {
       margin-bottom: 12px;
     }
     .flabel {
+      display: block;
       font-size: 12.5px;
       color: var(--secondary-text-color);
       margin: 12px 0 6px;
@@ -483,7 +545,47 @@ export class AdvancedCoverCardEditor extends LitElement {
       align-items: center;
       gap: 12px;
       padding: 9px 0;
-      cursor: pointer;
+    }
+    .toggle {
+      position: relative;
+      flex: none;
+      width: 38px;
+      height: 22px;
+      padding: 0;
+      border: none;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--primary-text-color) 28%, transparent);
+      transition: background 0.15s ease;
+    }
+    .toggle .knob {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+      transition: left 0.15s ease;
+    }
+    .toggle.on {
+      background: var(--primary-color);
+    }
+    .toggle.on .knob {
+      left: 18px;
+    }
+    .toggle:focus-visible,
+    .seg button:focus-visible,
+    .chip:focus-visible,
+    .order button:focus-visible {
+      outline: 2px solid var(--primary-color);
+      outline-offset: 2px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .toggle,
+      .toggle .knob {
+        transition: none;
+      }
     }
     .ttext {
       flex: 1;

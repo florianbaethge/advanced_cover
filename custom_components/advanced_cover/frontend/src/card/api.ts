@@ -1,5 +1,5 @@
 import type { EntryRow, HomeAssistant } from "../types";
-import type { CardSnapshot } from "./types";
+import type { CardSnapshot, CardUnloaded } from "./types";
 
 const D = "advanced_cover";
 
@@ -13,14 +13,23 @@ function withEntry(
 export const listEntries = (hass: HomeAssistant): Promise<EntryRow[]> =>
   hass.callWS({ type: `${D}/card/entries` });
 
+/**
+ * Subscribe to the card snapshot of one entry.
+ *
+ * Without the library's automatic resubscription: after a reconnect it sends
+ * the command once and drops the subscription for good if that fails — which
+ * it does while Home Assistant is still starting. The caller resubscribes
+ * itself (on the connection's `ready` event, with retries).
+ */
 export const subscribeSnapshot = (
   hass: HomeAssistant,
-  callback: (snapshot: CardSnapshot) => void,
+  callback: (message: CardSnapshot | CardUnloaded) => void,
   entryId?: string
 ): Promise<() => Promise<void>> | undefined =>
   hass.connection?.subscribeMessage(
     callback,
-    withEntry({ type: `${D}/card/subscribe` }, entryId)
+    withEntry({ type: `${D}/card/subscribe` }, entryId),
+    { resubscribe: false }
   );
 
 const action = (

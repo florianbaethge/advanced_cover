@@ -12,10 +12,16 @@ const time = (iso: string | null | undefined): number => {
 export const occKey = (occ: Occurrence): string =>
   `${occ.scenario_id}@${occ.planned_at}`;
 
-/** The next block that has not fired yet, or null when the day is done. */
+/** The next block that has not fired yet, or null when the day is done.
+
+    A block without covers moves nothing, so it is not "next" (the backend's
+    next-run sensor skips it too). */
 export function nextUp(plan: Occurrence[], nowMs: number): Occurrence | null {
   const upcoming = plan
-    .filter((occ) => !occ.fired && time(occ.planned_at) >= nowMs)
+    .filter(
+      (occ) =>
+        !occ.fired && occ.assignments.length > 0 && time(occ.planned_at) >= nowMs
+    )
     .sort((a, b) => time(a.planned_at) - time(b.planned_at));
   return upcoming[0] ?? null;
 }
@@ -28,10 +34,18 @@ export function lastRun(plan: Occurrence[]): Occurrence | null {
   return fired[0] ?? null;
 }
 
-/** Blocks with a run that fired but still waits for its conditions. */
-export function waitingRuns(plan: Occurrence[]): Occurrence[] {
+/** Blocks with a run that fired but still waits for its conditions.
+
+    A facade-relative scenario also keeps covers armed — until the sun reaches
+    their side. That is a cover waiting for its turn, not for a condition. */
+export function waitingRuns(plan: Occurrence[], nowMs: number): Occurrence[] {
   return plan.filter(
-    (occ) => occ.fired && occ.assignments.some((run) => run.status === "armed")
+    (occ) =>
+      occ.fired &&
+      occ.assignments.some(
+        (run) =>
+          run.status === "armed" && !(run.fire_at && time(run.fire_at) > nowMs)
+      )
   );
 }
 
@@ -95,8 +109,9 @@ export function groupByArea(
 /** Per-result counts of a manual run, read back from the action log.
 
     A manual run answers with a bare "ok"; what each cover did only shows up
-    as log entries. Everything logged for the scenario since `sinceMs` is
-    that run. */
+    as log entries. Everything logged for the scenario after `sinceMs` is
+    that run. `sinceMs` must be on the server's clock — the log is stamped
+    there, and a browser a few seconds off would miss or over-count. */
 export function runResultCounts(
   log: LogEntry[],
   scenarioId: string,
@@ -104,7 +119,7 @@ export function runResultCounts(
 ): Array<[string, number]> {
   const counts = new Map<string, number>();
   for (const entry of log) {
-    if (entry.scenario_id !== scenarioId || time(entry.time) < sinceMs) continue;
+    if (entry.scenario_id !== scenarioId || time(entry.time) <= sinceMs) continue;
     counts.set(entry.result, (counts.get(entry.result) ?? 0) + 1);
   }
   return [...counts.entries()];

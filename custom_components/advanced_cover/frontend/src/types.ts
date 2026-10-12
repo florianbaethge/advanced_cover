@@ -36,8 +36,14 @@ export interface HomeAssistant {
     ): Promise<() => Promise<void>>;
     subscribeMessage<Result>(
       callback: (result: Result) => void,
-      message: Record<string, unknown>
+      message: Record<string, unknown>,
+      options?: { resubscribe?: boolean }
     ): Promise<() => Promise<void>>;
+    addEventListener?(type: "ready" | "disconnected", listener: () => void): void;
+    removeEventListener?(
+      type: "ready" | "disconnected",
+      listener: () => void
+    ): void;
   };
   language?: string;
 }
@@ -173,6 +179,8 @@ export interface NextAction {
   position?: number;
   armed: boolean;
   armed_until?: string | null;
+  /** Facade-relative triggers: the armed cover's own turn. */
+  fire_at?: string | null;
   waiting_for?: string[];
 }
 

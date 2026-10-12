@@ -122,6 +122,13 @@ export const cardStyles = css`
     border-radius: 50%;
     background: currentColor;
   }
+  button.pill {
+    border: none;
+    font-family: inherit;
+  }
+  button.pill:hover {
+    filter: brightness(1.15);
+  }
   .pill.pri {
     background: var(--ac-tint);
     color: var(--ac-pri);
@@ -520,10 +527,12 @@ export const cardStyles = css`
     color: var(--ac-fg);
   }
   .feedback {
-    display: flex;
+    margin-top: 10px;
+  }
+  .results {
+    display: inline-flex;
     flex-wrap: wrap;
     gap: 6px;
-    margin-top: 10px;
   }
 
   /* ---- timeline -------------------------------------------------------- */

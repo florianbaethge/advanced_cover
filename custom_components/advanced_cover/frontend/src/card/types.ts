@@ -21,8 +21,6 @@ export interface CardScenario {
   name: string;
   enabled: boolean;
   trigger: Trigger;
-  /** Whether today's plan can hold it at all (weekday + time of year). */
-  scheduled_today: boolean;
   cover_ids: string[];
   /** Distinct target positions across the assigned covers, ascending. */
   positions: number[];
@@ -36,17 +34,21 @@ export interface CardSnapshot {
   now: string;
   sun: { sunrise: string | null; sunset: string | null; solar_noon: string | null };
   master_entity_id: string | null;
-  next_run_entity_id: string | null;
   covers: CardCover[];
   scenarios: CardScenario[];
   plan: Occurrence[];
   log: LogEntry[];
 }
 
+/** Last message of a subscription whose entry was unloaded (e.g. a reload). */
+export interface CardUnloaded {
+  unloaded: true;
+}
+
 // ---- Card configuration ----
 
 export type CardSection = "next" | "timeline" | "covers" | "scenarios";
-export type NextAction_ = "run" | "toggle";
+export type NextButton = "run" | "toggle";
 
 export const CARD_SECTIONS: CardSection[] = [
   "next",
@@ -54,7 +56,7 @@ export const CARD_SECTIONS: CardSection[] = [
   "covers",
   "scenarios",
 ];
-export const NEXT_ACTIONS: NextAction_[] = ["run", "toggle"];
+export const NEXT_ACTIONS: NextButton[] = ["run", "toggle"];
 
 export interface AdvancedCoverCardConfig {
   type: string;
@@ -66,7 +68,7 @@ export interface AdvancedCoverCardConfig {
   compact?: boolean;
   show_header?: boolean;
   // next
-  next_actions?: NextAction_[];
+  next_actions?: NextButton[];
   show_last_run?: boolean;
   // timeline
   timeline_list?: boolean;

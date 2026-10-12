@@ -89,3 +89,22 @@ async def async_register_card(hass: HomeAssistant) -> None:
                 item["id"], {"res_type": "module", "url": url}
             )
             _LOGGER.info("Updated Lovelace resource to %s", url)
+
+
+async def async_unregister_card(hass: HomeAssistant) -> None:
+    """Drop the Lovelace resource entry when the integration is removed.
+
+    Left behind, it would make every dashboard request a module that no longer
+    exists. The static route itself stays until the next restart — aiohttp
+    cannot remove routes.
+    """
+    resources = _lovelace_resources(hass)
+    if resources is None or not hasattr(resources, "async_items"):
+        return
+    if not getattr(resources, "loaded", True):
+        await resources.async_load()
+        resources.loaded = True
+    for item in list(resources.async_items()):
+        if str(item.get("url", "")).startswith(CARD_URL):
+            await resources.async_delete_item(item["id"])
+            _LOGGER.info("Removed Lovelace resource %s", item.get("url"))

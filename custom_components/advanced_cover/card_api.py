@@ -2,10 +2,18 @@
 
 Deliberately separate from ``websocket`` (the panel API): the panel is an admin
 configuration surface, the card is a dashboard control every household member
-sees. The snapshot here carries today's plan and the live state of covers and
-scenarios, but none of the configuration behind them (conditions, low-mode
-wiring, safety settings), and it is open to non-admin users — exactly like the
-switches, sensors and services this integration already exposes.
+sees, so this API is open to non-admin users.
+
+What the snapshot carries is what the Today tab shows about the day: the plan,
+the live state of covers and scenarios, and each run's live check — including
+the entities its conditions look at and their current values, which any user
+can read from the state machine anyway. What it leaves out is the editable
+configuration: a cover's wiring (low mode, contact mapping, safety settings)
+and a scenario's assignments and overrides.
+
+Reading needs no special rights. Acting needs the same *control* permission
+on the affected entities that the cover and switch entities ask for, so a
+read-only user can look but not move anything.
 
 Everything user-visible is sent as raw data (ISO timestamps, positions, result
 codes) and formatted in the frontend, so times and labels follow each user's
@@ -18,15 +26,21 @@ import logging
 from typing import Any
 
 import voluptuous as vol
+from homeassistant.auth.permissions.const import POLICY_CONTROL
 from homeassistant.components import websocket_api
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError, Unauthorized
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from .capabilities import get_cover_capabilities
-from .const import CARD_API_REGISTERED_KEY, CARD_LOG_SIZE, DOMAIN, WEEKDAYS
+from .const import (
+    CARD_API_REGISTERED_KEY,
+    CARD_LOG_SIZE,
+    CARD_SUBSCRIBERS_KEY,
+    DOMAIN,
+)
 from .coordinator import AdvancedCoverCoordinator
 from .executor import current_cover_position
 from .models import CoverItem, EntryData, Scenario
@@ -34,6 +48,7 @@ from .scheduler import AdvancedCoverScheduler
 from .websocket import (
     _domain_entries,
     _enrich_occurrence,
+    _get_runtime,
     _resolved_contact,
     _safety_blocked_now,
     _sun_times,
@@ -56,29 +71,16 @@ COVER_COMMANDS = ("open", "close", "stop")
 
 ERR_AMBIGUOUS = "ambiguous_entry"
 
-Runtime = tuple[AdvancedCoverCoordinator, AdvancedCoverScheduler]
-
 
 # --------------------------------------------------------------------------
 # lookups
 # --------------------------------------------------------------------------
 
 
-def _resolve(hass: HomeAssistant, entry_id: str | None) -> Runtime | None:
-    """Resolve the requested entry, or auto-pick when there is exactly one.
-
-    Auto-picking is what makes a bare ``type: custom:advanced-cover-card``
-    work; with several entries the card must name one.
-    """
-    entries = _domain_entries(hass)
-    data: dict[str, Any] | None = None
-    if entry_id:
-        data = entries.get(entry_id)
-    elif len(entries) == 1:
-        data = next(iter(entries.values()))
-    if data is None:
-        return None
-    return data["coordinator"], data["scheduler"]
+# Resolving is the panel API's: the requested entry, or the only one. The
+# auto-pick is what makes a bare ``type: custom:advanced-cover-card`` work;
+# with several entries the card must name one.
+_resolve = _get_runtime
 
 
 def _not_found(hass: HomeAssistant, connection: Any, msg: dict[str, Any]) -> None:
@@ -91,13 +93,27 @@ def _not_found(hass: HomeAssistant, connection: Any, msg: dict[str, Any]) -> Non
     )
 
 
-def _entity_id(
-    hass: HomeAssistant, entry_id: str, platform: str, suffix: str
-) -> str | None:
-    """Entity id of one of this entry's own entities (for more-info)."""
+def _master_entity_id(hass: HomeAssistant, entry_id: str) -> str | None:
+    """Entity id of the entry's master switch (more-info, permission check)."""
     return er.async_get(hass).async_get_entity_id(
-        platform, DOMAIN, f"{entry_id}_{suffix}"
+        "switch", DOMAIN, f"{entry_id}_master"
     )
+
+
+def _require_control(
+    connection: websocket_api.ActiveConnection, entity_ids: list[str | None]
+) -> None:
+    """Raise unless the user may control every given entity.
+
+    The card's actions bypass the entities they stand for (the master switch,
+    the cover entities a scenario moves), and with them Home Assistant's own
+    permission check — so it is repeated here.
+    """
+    for entity_id in entity_ids:
+        if entity_id and not connection.user.permissions.check_entity(
+            entity_id, POLICY_CONTROL
+        ):
+            raise Unauthorized(entity_id=entity_id, permission=POLICY_CONTROL)
 
 
 # --------------------------------------------------------------------------
@@ -126,21 +142,14 @@ def _cover_row(
     }
 
 
-def _scenario_row(data: EntryData, scenario: Scenario, weekday: str) -> dict[str, Any]:
+def _scenario_row(data: EntryData, scenario: Scenario) -> dict[str, Any]:
     """One scenario as the card's run list shows it."""
-    today = dt_util.now().date()
     assignments = [a for a in scenario.assignments if a.cover_item_id in data.covers]
     return {
         "id": scenario.id,
         "name": scenario.name,
         "enabled": scenario.enabled,
         "trigger": scenario.trigger.to_dict(),
-        # Whether today's plan can hold it at all (weekday + time of year).
-        "scheduled_today": (
-            scenario.enabled
-            and weekday in scenario.weekdays
-            and scenario.active_on(today)
-        ),
         "cover_ids": [a.cover_item_id for a in assignments],
         # Distinct targets: assignments may override the scenario's position.
         "positions": sorted(
@@ -160,19 +169,16 @@ def _snapshot(
     """Card state for one entry."""
     data = coordinator.data_model
     entry_id = coordinator.config_entry.entry_id
-    now = dt_util.now()
-    now_iso = now.isoformat()
-    weekday = WEEKDAYS[now.weekday()]
+    now_iso = dt_util.now().isoformat()
     return {
         "entry_id": entry_id,
         "name": data.config.name,
         "enabled": data.config.enabled,
         "now": now_iso,
         "sun": _sun_times(hass),
-        "master_entity_id": _entity_id(hass, entry_id, "switch", "master"),
-        "next_run_entity_id": _entity_id(hass, entry_id, "sensor", "next_run"),
+        "master_entity_id": _master_entity_id(hass, entry_id),
         "covers": [_cover_row(hass, scheduler, c) for c in data.covers.values()],
-        "scenarios": [_scenario_row(data, s, weekday) for s in data.scenarios],
+        "scenarios": [_scenario_row(data, s) for s in data.scenarios],
         "plan": [
             _enrich_occurrence(hass, data, occ.to_dict(), now_iso)
             for occ in coordinator.day_plan
@@ -218,12 +224,21 @@ def ws_subscribe(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Push a fresh snapshot whenever the plan or a referenced entity changes."""
+    """Push a fresh snapshot whenever the plan or a referenced entity changes.
+
+    When the entry is unloaded the subscriber gets one last ``{"unloaded":
+    true}`` event instead of silence, so the card can subscribe again once the
+    entry is back (a reload) rather than showing a frozen day forever.
+    """
     runtime = _resolve(hass, msg.get("entry_id"))
     if runtime is None:
         _not_found(hass, connection, msg)
         return
     coordinator, scheduler = runtime
+    entry_id = coordinator.config_entry.entry_id
+    subscribers: set[CALLBACK_TYPE] = hass.data.setdefault(
+        CARD_SUBSCRIBERS_KEY, {}
+    ).setdefault(entry_id, set())
 
     @callback
     def _push() -> None:
@@ -233,9 +248,34 @@ def ws_subscribe(
             )
         )
 
-    connection.subscriptions[msg["id"]] = coordinator.async_add_listener(_push)
+    stop_listening = coordinator.async_add_listener(_push)
+
+    @callback
+    def _release() -> None:
+        """Drop the listener and tell the card its entry went away."""
+        stop_listening()
+        connection.subscriptions.pop(msg["id"], None)
+        connection.send_message(
+            websocket_api.event_message(msg["id"], {"unloaded": True})
+        )
+
+    @callback
+    def _unsubscribe() -> None:
+        stop_listening()
+        subscribers.discard(_release)
+
+    subscribers.add(_release)
+    connection.subscriptions[msg["id"]] = _unsubscribe
     connection.send_result(msg["id"])
     _push()
+
+
+@callback
+def async_release_subscribers(hass: HomeAssistant, entry_id: str) -> None:
+    """Detach every card subscribed to an entry that is being unloaded."""
+    subscribers = hass.data.get(CARD_SUBSCRIBERS_KEY, {}).pop(entry_id, set())
+    for release in list(subscribers):
+        release()
 
 
 @websocket_api.websocket_command(
@@ -261,7 +301,8 @@ async def ws_action(
     Open to non-admin users on purpose: every action here has an equivalent
     switch, cover entity or service that a regular Home Assistant user may
     already call, so gating the card would only push people to the uglier
-    route.
+    route. A user without control permission on the entities involved is
+    refused, as those entities would refuse them.
     """
     runtime = _resolve(hass, msg.get("entry_id"))
     if runtime is None:
@@ -279,6 +320,15 @@ async def ws_action(
             if not scenario_id:
                 _invalid("scenario_id is required")
                 return
+            scenario = coordinator.data_model.scenario_by_id(scenario_id)
+            _require_control(
+                connection,
+                [
+                    cover.cover_entity_id
+                    for a in (scenario.assignments if scenario else [])
+                    if (cover := coordinator.cover_by_id(a.cover_item_id))
+                ],
+            )
             await scheduler.async_run_scenario(
                 scenario_id, ignore_conditions=msg["ignore_conditions"]
             )
@@ -286,6 +336,10 @@ async def ws_action(
             if "enabled" not in msg:
                 _invalid("enabled is required")
                 return
+            _require_control(
+                connection,
+                [_master_entity_id(hass, coordinator.config_entry.entry_id)],
+            )
             coordinator.data_model.config.enabled = msg["enabled"]
             await coordinator.async_save_and_notify()
         else:
@@ -298,7 +352,16 @@ async def ws_action(
             if "command" not in msg:
                 _invalid("command is required")
                 return
-            await async_drive_cover(hass, cover, msg["command"])
+            # The user's context makes Home Assistant check the cover entity
+            # itself and puts the user's name into the logbook.
+            await async_drive_cover(
+                hass, cover, msg["command"], context=connection.context(msg)
+            )
+    except Unauthorized:
+        connection.send_error(
+            msg["id"], websocket_api.ERR_UNAUTHORIZED, "Not allowed to control this"
+        )
+        return
     except ValueError as err:
         connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, str(err))
         return

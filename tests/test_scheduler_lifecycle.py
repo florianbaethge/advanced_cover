@@ -282,6 +282,22 @@ async def test_relative_azimuth_covers_fire_at_their_own_times(
     t_west = scheduler.azimuth_crossing_local(210.0, day)
     assert t_south is not None and t_west is not None and t_south < t_west
 
+    # Before either crossing each cover reports its own time, not the block's
+    # (which is only the earliest of them).
+    freezer.move_to(t_south - timedelta(minutes=30))
+    await scheduler.async_rebuild_plan()
+    await hass.async_block_till_done()
+    south_next = scheduler.next_action_for_cover("c-south")
+    west_next = scheduler.next_action_for_cover("c-west")
+    assert south_next is not None and west_next is not None
+    assert south_next["armed"] is False and west_next["armed"] is False
+    assert dt_util.parse_datetime(south_next["when"]) < dt_util.parse_datetime(
+        west_next["when"]
+    )
+    assert (
+        abs((dt_util.parse_datetime(west_next["when"]) - t_west).total_seconds()) < 60
+    )
+
     # Between the two crossings: catch-up fires the occurrence, the south
     # cover executes, the west cover arms for its own later time.
     freezer.move_to(t_south + timedelta(minutes=1))
@@ -298,6 +314,10 @@ async def test_relative_azimuth_covers_fire_at_their_own_times(
     assert abs((west_run.fire_at - t_west).total_seconds()) < 60
     assert west_run.rearm_entity_ids == {"sun.sun"}
     assert executor.calls == 1
+    # Armed, but for its own turn — the report carries that time.
+    west_next = scheduler.next_action_for_cover("c-west")
+    assert west_next is not None and west_next["armed"] is True
+    assert west_next["fire_at"] == west_run.fire_at.isoformat()
 
     # Past the west crossing a sun.sun update re-checks the armed run.
     freezer.move_to(t_west + timedelta(minutes=1))

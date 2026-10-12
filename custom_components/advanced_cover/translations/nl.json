@@ -518,12 +518,8 @@
     "card_trigger_solar_noon": "Zonnemiddag",
     "card_trigger_sun_azimuth": "Zonrichting",
     "card_trigger_sun_elevation": "Zonhoogte",
-    "card_timeline_title": "Vandaag",
     "card_timeline_empty": "Vandaag start geen scenario.",
-    "card_runs_count": "{n} runs",
-    "card_runs_count_one": "1 run",
     "card_retry_until": "herhaalt tot {time}",
-    "card_covers_title": "Covers",
     "card_covers_empty": "Nog geen covers ingesteld.",
     "card_cover_next": "{time} → {pos} %",
     "card_cover_waiting": "wacht tot {time}",
@@ -535,7 +531,6 @@
     "card_cover_open": "{name} openen",
     "card_cover_stop": "{name} stoppen",
     "card_cover_close": "{name} sluiten",
-    "card_scenarios_title": "Scenario's",
     "card_scenarios_empty": "Nog geen scenario's ingesteld.",
     "card_scn_today": "Vandaag {time}",
     "card_scn_not_today": "Vandaag niet gepland",
@@ -582,6 +577,10 @@
     "card_ed_controls": "Knoppen open, stop en dicht",
     "card_ed_confirm": "Vragen voor het uitvoeren",
     "card_ed_ignore": "Voorwaarden negeren",
-    "card_ed_ignore_help": "Handmatige runs slaan de voorwaarden van het scenario over. De veiligheidsregel voor het raam blijft gelden."
+    "card_ed_ignore_help": "Handmatige runs slaan de voorwaarden van het scenario over. De veiligheidsregel voor het raam blijft gelden.",
+    "card_master_info": "Automatiseringsschakelaar tonen",
+    "card_ed_runs": "Handmatige runs",
+    "card_ed_runs_help": "Geldt voor elke uitvoerknop op de kaart.",
+    "card_ed_entry_gone": "{id} (bestaat niet meer)"
   }
 }

@@ -1,4 +1,10 @@
-import { LitElement, html, nothing, type TemplateResult } from "lit";
+import {
+  LitElement,
+  html,
+  nothing,
+  type PropertyValues,
+  type TemplateResult,
+} from "lit";
 
 import { fireEvent } from "../fire-event";
 import {
@@ -73,8 +79,17 @@ const WIDE_PX = 720;
 const CONFIRM_MS = 5000;
 /** How long the result of a manual run stays on screen. */
 const FEEDBACK_MS = 9000;
+/** How long a rejected action stays on screen. */
+const ERROR_MS = 8000;
 /** Repaint interval for the countdown and the timeline's now-line. */
 const TICK_MS = 30000;
+/** Subscription retries back off from the first to the second value. */
+const RETRY_MIN_MS = 2000;
+const RETRY_MAX_MS = 60000;
+/** Failed subscriptions in a row after which the last snapshot is dropped:
+    long enough to ride out a reload or restart, short enough not to show a
+    day that is no longer true. */
+const STALE_AFTER_FAILURES = 4;
 
 const VERDICT_ICONS: Record<string, string> = {
   would_run: "mdi:play-circle-outline",
@@ -95,7 +110,8 @@ const COVER_ICONS: Record<string, { open: string; close: string }> = {
     open: "mdi:arrow-expand-horizontal",
     close: "mdi:arrow-collapse-horizontal",
   },
-  awning: { open: "mdi:arrow-collapse-up", close: "mdi:arrow-expand-down" },
+  // Home Assistant's convention: an awning is "open" when it is extended.
+  awning: { open: "mdi:arrow-expand-down", close: "mdi:arrow-collapse-up" },
 };
 const DEFAULT_COVER_ICONS = { open: "mdi:arrow-up", close: "mdi:arrow-down" };
 
@@ -150,16 +166,18 @@ export class AdvancedCoverCard extends LitElement {
   /** Last rejected action, shown inline and cleared on the next one. */
   private _actionError?: string;
 
-  /** Key of the control whose request is in flight. */
-  private _busy?: string;
+  /** Keys of the controls whose request is in flight. Per control on
+      purpose: a slow move must never grey out another cover's Stop. */
+  private _busy = new Set<string>();
 
-  /** Key of the run button that waits for its second tap. */
+  /** Key of the run button that waits for its second tap. It names the
+      scenario, so a confirmation can never carry over to another one. */
   private _confirm?: string;
 
   /** Plan block opened in the timeline. */
   private _selected?: string;
 
-  /** The manual run whose outcome is being shown. */
+  /** The manual run whose outcome is being shown; `since` is server time. */
   private _feedback?: { scenarioId: string; since: number };
 
   private _narrow = false;
@@ -172,11 +190,25 @@ export class AdvancedCoverCard extends LitElement {
 
   private _feedbackTimer?: number;
 
+  private _errorTimer?: number;
+
   private _ticker?: number;
 
   private _unsubscribe?: Promise<() => Promise<void>>;
 
   private _subscribedEntry?: string;
+
+  /** Bumped on every teardown, so a late answer to an old attempt is ignored. */
+  private _generation = 0;
+
+  private _retryTimer?: number;
+
+  private _retryDelay = RETRY_MIN_MS;
+
+  private _failures = 0;
+
+  /** Connection whose `ready` event (a reconnect) is being listened to. */
+  private _watched?: HomeAssistant["connection"];
 
   private _resizeObserver?: ResizeObserver;
 
@@ -200,7 +232,7 @@ export class AdvancedCoverCard extends LitElement {
       this._snapshot = undefined;
       this._selected = undefined;
     }
-    this._resubscribe();
+    this._subscribe();
   }
 
   /** Rough height in HA's 50 px card units, so masonry can place the card. */
@@ -231,7 +263,7 @@ export class AdvancedCoverCard extends LitElement {
 
   connectedCallback(): void {
     super.connectedCallback();
-    this._resubscribe();
+    this._subscribe();
     this._observeWidth();
     this._ticker = window.setInterval(() => this.requestUpdate(), TICK_MS);
   }
@@ -239,21 +271,59 @@ export class AdvancedCoverCard extends LitElement {
   disconnectedCallback(): void {
     super.disconnectedCallback();
     this._teardown();
+    this._watched?.removeEventListener?.("ready", this._onReconnect);
+    this._watched = undefined;
     window.clearInterval(this._ticker);
     window.clearTimeout(this._confirmTimer);
     window.clearTimeout(this._feedbackTimer);
+    window.clearTimeout(this._errorTimer);
+    // The timers are gone, so what they would have ended must end here: a
+    // card that is moved in the DOM may not come back with "Run?" still armed.
+    this._confirm = undefined;
+    this._feedback = undefined;
+    this._actionError = undefined;
     this._resizeObserver?.disconnect();
     this._resizeObserver = undefined;
   }
 
-  protected updated(): void {
-    if (this.hass && !this._unsubscribe) {
-      this._resubscribe();
+  /** `hass` is replaced on every state change anywhere in Home Assistant;
+      repaint only when something the card shows has changed with it. */
+  protected shouldUpdate(changed: PropertyValues): boolean {
+    if (changed.size !== 1 || !changed.has("hass")) return true;
+    const previous = changed.get("hass") as HomeAssistant | undefined;
+    const hass = this.hass;
+    const snap = this._snapshot;
+    if (!previous || !hass || !snap) return true;
+    if (
+      previous.localize !== hass.localize ||
+      previous.locale !== hass.locale ||
+      previous.language !== hass.language ||
+      previous.areas !== hass.areas ||
+      previous.user !== hass.user ||
+      previous.connection !== hass.connection ||
+      previous.themes?.darkMode !== hass.themes?.darkMode
+    ) {
+      return true;
+    }
+    const cfg = this._cfg;
+    if (cfg.compact || !cfg.sections.includes("covers")) return false;
+    return snap.covers.some(
+      (cover) => previous.states[cover.entity_id] !== hass.states[cover.entity_id]
+    );
+  }
+
+  protected updated(changed: PropertyValues): void {
+    if (this.hass && !this._unsubscribe && this._retryTimer === undefined) {
+      this._subscribe();
     }
     this.toggleAttribute("data-narrow", this._narrow);
     this.toggleAttribute("data-stack", this._stack);
     this.toggleAttribute("data-wide", this._wide);
     this.toggleAttribute("data-dark", Boolean(this.hass?.themes?.darkMode));
+    if (changed.has("_confirm") && this._confirm) {
+      // Arming swaps the play button for "Run?"; keep the keyboard on it.
+      this.renderRoot.querySelector<HTMLElement>("[data-confirm]")?.focus();
+    }
   }
 
   private get _cfg(): Required<
@@ -287,21 +357,69 @@ export class AdvancedCoverCard extends LitElement {
   // ---- data ---------------------------------------------------------------
 
   private _teardown(): void {
+    this._generation += 1;
     this._unsubscribe?.then((unsub) => unsub()).catch(() => undefined);
     this._unsubscribe = undefined;
     this._subscribedEntry = undefined;
+    window.clearTimeout(this._retryTimer);
+    this._retryTimer = undefined;
   }
 
-  private _resubscribe(): void {
-    if (!this.hass || !this._config || !this.isConnected) return;
-    const entry = this._config.entry_id ?? "";
-    if (this._unsubscribe && this._subscribedEntry === entry) return;
+  /** A reconnect (Home Assistant restarted, network came back): the old
+      subscription died with the old socket. */
+  private _onReconnect = (): void => {
     this._teardown();
+    this._retryDelay = RETRY_MIN_MS;
+    this._subscribe();
+  };
+
+  private _watchConnection(): void {
+    const connection = this.hass?.connection;
+    if (connection === this._watched) return;
+    this._watched?.removeEventListener?.("ready", this._onReconnect);
+    this._watched = connection;
+    connection?.addEventListener?.("ready", this._onReconnect);
+  }
+
+  private _scheduleRetry(): void {
+    window.clearTimeout(this._retryTimer);
+    this._retryTimer = window.setTimeout(() => {
+      this._retryTimer = undefined;
+      this._subscribe();
+    }, this._retryDelay);
+    this._retryDelay = Math.min(this._retryDelay * 2, RETRY_MAX_MS);
+  }
+
+  private _subscribe(): void {
+    if (!this.hass || !this._config || !this.isConnected) return;
+    this._watchConnection();
+    const entry = this._config.entry_id ?? "";
+    // Subscribed, or waiting for the next attempt at exactly this entry.
+    if (
+      this._subscribedEntry === entry &&
+      (this._unsubscribe || this._retryTimer !== undefined)
+    ) {
+      return;
+    }
+    this._teardown();
+    const generation = this._generation;
     const pending = subscribeSnapshot(
       this.hass,
-      (snapshot) => {
-        this._snapshot = snapshot;
+      (message) => {
+        if (generation !== this._generation) return;
+        if ("unloaded" in message) {
+          // The entry was unloaded (a reload, usually): keep the last day on
+          // screen and come back for the new one.
+          this._teardown();
+          this._subscribedEntry = entry;
+          this._retryDelay = RETRY_MIN_MS;
+          this._scheduleRetry();
+          return;
+        }
+        this._snapshot = message;
         this._error = undefined;
+        this._failures = 0;
+        this._retryDelay = RETRY_MIN_MS;
       },
       this._config.entry_id
     );
@@ -309,27 +427,58 @@ export class AdvancedCoverCard extends LitElement {
     this._subscribedEntry = entry;
     this._unsubscribe = pending;
     pending.catch((err: { code?: string }) => {
+      if (generation !== this._generation) return;
       this._unsubscribe = undefined;
-      // "Nothing configured" and "several entries, pick one" need different
-      // answers from the user, so they get different sentences.
-      this._error = this._t(
-        err?.code === "ambiguous_entry" ? "card_pick_entry" : "card_no_entry"
-      );
+      this._failures += 1;
+      // A stale day is fine for a moment (restart, reload), not for long.
+      if (!this._snapshot || this._failures >= STALE_AFTER_FAILURES) {
+        this._snapshot = undefined;
+        // "Nothing configured" and "several entries, pick one" need
+        // different answers from the user, so they get different sentences.
+        this._error = this._t(
+          err?.code === "ambiguous_entry" ? "card_pick_entry" : "card_no_entry"
+        );
+      }
+      // Never on every repaint: a card that cannot subscribe would otherwise
+      // send one request per state change in the whole house.
+      this._scheduleRetry();
     });
   }
 
   // ---- actions ------------------------------------------------------------
 
-  private async _act(key: string, request: () => Promise<unknown>): Promise<void> {
-    if (!this.hass || this._busy) return;
-    this._busy = key;
-    this._actionError = undefined;
+  private _isBusy(key: string): boolean {
+    return this._busy.has(key);
+  }
+
+  private _showActionError(text: string | undefined): void {
+    this._actionError = text;
+    window.clearTimeout(this._errorTimer);
+    if (text) {
+      this._errorTimer = window.setTimeout(() => {
+        this._actionError = undefined;
+      }, ERROR_MS);
+    }
+  }
+
+  /** Run one request; resolves to whether it went through. */
+  private async _act(
+    key: string,
+    request: () => Promise<unknown>
+  ): Promise<boolean> {
+    if (!this.hass || this._busy.has(key)) return false;
+    this._busy = new Set(this._busy).add(key);
+    this._showActionError(undefined);
     try {
       await request();
+      return true;
     } catch (err) {
-      this._actionError = formatApiError(err, this._l);
+      this._showActionError(formatApiError(err, this._l));
+      return false;
     } finally {
-      this._busy = undefined;
+      const busy = new Set(this._busy);
+      busy.delete(key);
+      this._busy = busy;
     }
   }
 
@@ -353,9 +502,11 @@ export class AdvancedCoverCard extends LitElement {
   }
 
   private async _run(key: string, scenarioId: string): Promise<void> {
-    // The log is stamped with the server's clock; leave room for a skewed one.
-    const since = Date.now() - 2000;
-    await this._act(key, () =>
+    // The run's outcome is read back from the action log, which is stamped
+    // with the server's clock — so the "since" mark is the server's too: the
+    // time of the last snapshot, which is later than everything logged so far.
+    const since = this._snapshot ? new Date(this._snapshot.now).getTime() : 0;
+    const ran = await this._act(key, () =>
       runScenario(
         this.hass!,
         scenarioId,
@@ -363,7 +514,7 @@ export class AdvancedCoverCard extends LitElement {
         this._config?.entry_id
       )
     );
-    if (this._actionError) return;
+    if (!ran) return;
     this._feedback = { scenarioId, since };
     window.clearTimeout(this._feedbackTimer);
     this._feedbackTimer = window.setTimeout(() => {
@@ -426,7 +577,7 @@ export class AdvancedCoverCard extends LitElement {
     return html`<ha-card>
       ${cfg.show_header ? this._renderHeader(snap) : nothing}
       ${this._actionError
-        ? html`<p class="error">${this._actionError}</p>`
+        ? html`<p class="error" role="alert">${this._actionError}</p>`
         : nothing}
       <div class="sections">
         ${sections.map(
@@ -437,14 +588,26 @@ export class AdvancedCoverCard extends LitElement {
     </ha-card>`;
   }
 
+  /** State of the automation; a tap opens the master switch, which is how
+      a card without the "next" section still lets you switch it. */
   private _statePill(snap: CardSnapshot): TemplateResult {
-    if (!snap.enabled) {
-      return html`<span class="pill">${this._t("card_state_off")}</span>`;
+    const [tone, key] = !snap.enabled
+      ? ["", "card_state_off"]
+      : waitingRuns(snap.plan, Date.now()).length
+        ? ["warn", "card_state_waiting"]
+        : ["pri", "card_state_active"];
+    if (!snap.master_entity_id) {
+      return html`<span class="pill ${tone}">${this._t(key)}</span>`;
     }
-    if (waitingRuns(snap.plan).length) {
-      return html`<span class="pill warn">${this._t("card_state_waiting")}</span>`;
-    }
-    return html`<span class="pill pri">${this._t("card_state_active")}</span>`;
+    return html`<button
+      type="button"
+      class="pill ${tone}"
+      title=${this._t("card_master_info")}
+      aria-label="${this._t(key)} · ${this._t("card_master_info")}"
+      @click=${() => this._moreInfo(snap.master_entity_id)}
+    >
+      ${this._t(key)}
+    </button>`;
   }
 
   private _renderHeader(snap: CardSnapshot): TemplateResult {
@@ -523,28 +686,51 @@ export class AdvancedCoverCard extends LitElement {
     </span>`;
   }
 
-  /** Per-cover outcome of the manual run that just finished. */
-  private _renderFeedback(scenarioId: string): TemplateResult | typeof nothing {
+  /** Per-result counts of the manual run that just finished, or null. */
+  private _feedbackCounts(scenarioId: string): Array<[string, number]> | null {
     const feedback = this._feedback;
     if (!feedback || feedback.scenarioId !== scenarioId || !this._snapshot) {
-      return nothing;
+      return null;
     }
-    const counts = runResultCounts(
-      this._snapshot.log,
-      scenarioId,
-      feedback.since
-    );
+    return runResultCounts(this._snapshot.log, scenarioId, feedback.since);
+  }
+
+  /** Per-cover outcome of the manual run that just finished. */
+  private _renderFeedback(scenarioId: string): TemplateResult | typeof nothing {
+    const counts = this._feedbackCounts(scenarioId);
+    if (!counts) return nothing;
     if (!counts.length) {
-      return html`<span class="badge"
+      return html`<span class="badge" role="status"
         ><span>${this._t("card_run_nothing")}</span></span
       >`;
     }
-    return html`${counts.map(
-      ([result, n]) =>
-        html`<span class="badge ${result}"
-          ><span>${n}× ${this._t(`status_${result}`)}</span></span
-        >`
-    )}`;
+    return html`<span class="results" role="status"
+      >${counts.map(
+        ([result, n]) =>
+          html`<span class="badge ${result}"
+            ><span>${n}× ${this._t(`status_${result}`)}</span></span
+          >`
+      )}</span
+    >`;
+  }
+
+  /** The same outcome as one line of text, for the compact tile. */
+  private _feedbackText(scenarioId: string): string | null {
+    const counts = this._feedbackCounts(scenarioId);
+    if (!counts) return null;
+    if (!counts.length) return this._t("card_run_nothing");
+    return counts
+      .map(([result, n]) => `${n}× ${this._t(`status_${result}`)}`)
+      .join(" · ");
+  }
+
+  /** Status of one plan block in words (the timeline marker's label). */
+  private _occStatusText(occ: Occurrence): string {
+    if (occ.fired) return this._t(`status_${occKind(occ)}`);
+    const verdict = occVerdict(occ);
+    return verdict === "would_run"
+      ? this._t("status_planned")
+      : this._t(`preflight_${verdict}`);
   }
 
   private _runButton(
@@ -553,14 +739,15 @@ export class AdvancedCoverCard extends LitElement {
     label: string
   ): TemplateResult {
     const armed = this._confirm === key;
-    const busy = this._busy === key;
+    const busy = this._isBusy(key);
     const confirmLabel = this._t(
       this._cfg.ignore_conditions ? "card_action_run_force" : "card_action_run_confirm"
     );
     return html`<button
       type="button"
       class="btn ${armed ? "confirm" : "primary"}"
-      .disabled=${Boolean(this._busy)}
+      ?data-confirm=${armed}
+      .disabled=${busy}
       @click=${() => this._requestRun(key, scenarioId)}
     >
       <ha-icon
@@ -609,14 +796,18 @@ export class AdvancedCoverCard extends LitElement {
     const actions: TemplateResult[] = [];
     if (next && showRun) {
       actions.push(
-        this._runButton("next", next.scenario_id, this._t("card_action_run"))
+        this._runButton(
+          `next:${next.scenario_id}`,
+          next.scenario_id,
+          this._t("card_action_run")
+        )
       );
     }
     if (showToggle) {
       actions.push(html`<button
         type="button"
         class="btn ${snap.enabled ? "" : "primary"}"
-        .disabled=${Boolean(this._busy)}
+        .disabled=${this._isBusy("master")}
         @click=${this._toggleMaster}
       >
         <ha-icon icon=${snap.enabled ? "mdi:pause" : "mdi:power"}></ha-icon>
@@ -624,16 +815,15 @@ export class AdvancedCoverCard extends LitElement {
       </button>`);
     }
 
-    const waiting = snap.enabled ? waitingRuns(snap.plan) : [];
+    const waiting = snap.enabled ? waitingRuns(snap.plan, Date.now()) : [];
     const last = cfg.show_last_run ? lastRun(snap.plan) : null;
+    const feedback = next ? this._renderFeedback(next.scenario_id) : nothing;
     return html`
       <div class="next">
         <div class="next-main">
           ${main}
-          ${next
-            ? html`<div class="feedback">
-                ${this._renderFeedback(next.scenario_id)}
-              </div>`
+          ${feedback !== nothing
+            ? html`<div class="feedback">${feedback}</div>`
             : nothing}
         </div>
         ${actions.length
@@ -720,7 +910,8 @@ export class AdvancedCoverCard extends LitElement {
           id: key,
           minute,
           colorClass: `${timelineClass(occ)}${this._selected === key ? " sel" : ""}`,
-          label: `${formatTime(occ.planned_at)} · ${occ.scenario_name}`,
+          // Colour alone does not tell a screen reader how the run went.
+          label: `${formatTime(occ.planned_at)} · ${occ.scenario_name} · ${this._occStatusText(occ)}`,
           timeLabel: formatTime(occ.planned_at),
           spanEndMinute: retrySpanEnd(occ),
           onClick: () => this._select(key),
@@ -805,11 +996,12 @@ export class AdvancedCoverCard extends LitElement {
 
   /** What one plan block does: targets, live check, and each cover's line. */
   private _renderOccDetail(occ: Occurrence, solo: boolean): TemplateResult {
+    // The block's own conditions fail for every cover alike and are named
+    // once here; cover-scoped ones (window contact, position) are named on
+    // the line of the cover they stop.
     const reason = occ.fired
       ? occReasonSummary(this._l, occ)
-      : occVerdict(occ) === "would_run"
-        ? null
-        : preflightReason(this._l, occ.preflight);
+      : preflightReason(this._l, occ.preflight);
     const error =
       occ.fired &&
       occ.assignments.some((run) =>
@@ -850,9 +1042,9 @@ export class AdvancedCoverCard extends LitElement {
   }
 
   private _renderRunLine(occ: Occurrence, run: AssignmentRun): TemplateResult {
-    // A block that would be skipped as a whole takes its covers with it,
-    // whatever their own checks say.
-    const block = occ.fired ? "would_run" : occVerdict(occ);
+    // A block whose own conditions fail takes every cover with it, whatever
+    // the cover's own checks say; otherwise each cover speaks for itself.
+    const block = occ.fired ? "would_run" : (occ.preflight?.verdict ?? "would_run");
     const kind = block === "would_run" ? runKind(occ, run) : block;
     let state = "";
     if (occ.fired) {
@@ -959,6 +1151,18 @@ export class AdvancedCoverCard extends LitElement {
     const next = cover.next_action;
     if (!cover.enabled || !this._snapshot?.enabled) {
       parts.push(html`<span>${this._t("card_cover_auto_off")}</span>`);
+    } else if (
+      next?.armed &&
+      next.fire_at &&
+      new Date(next.fire_at).getTime() > Date.now()
+    ) {
+      // Facade-relative scenario: armed, but simply for this cover's turn.
+      parts.push(html`<span title=${next.scenario_name}>
+        ${this._t("card_cover_next", {
+          time: formatTime(next.fire_at),
+          pos: next.position ?? 0,
+        })}
+      </span>`);
     } else if (next?.armed) {
       parts.push(html`<span class="warn" title=${next.scenario_name}>
         <ha-icon icon="mdi:timer-sand"></ha-icon>
@@ -976,7 +1180,7 @@ export class AdvancedCoverCard extends LitElement {
     } else if (parts.length === 0) {
       parts.push(html`<span>${this._t("card_cover_idle")}</span>`);
     }
-    return html`<div class="cover-sub">${parts}</div>`;
+    return html`<span class="cover-sub">${parts}</span>`;
   }
 
   /** How much of the glyph the shade fills. An awning is the odd one out:
@@ -1004,7 +1208,9 @@ export class AdvancedCoverCard extends LitElement {
         type="button"
         title=${this._t(`card_cover_${command}`, { name: cover.name })}
         aria-label=${this._t(`card_cover_${command}`, { name: cover.name })}
-        .disabled=${disabled || !live.available || Boolean(this._busy)}
+        .disabled=${disabled ||
+        !live.available ||
+        this._isBusy(`cover:${cover.id}:${command}`)}
         @click=${() => this._drive(cover, command)}
       >
         <ha-icon icon=${icon}></ha-icon>
@@ -1096,7 +1302,7 @@ export class AdvancedCoverCard extends LitElement {
     const trigger = triggerMeta(scenario.trigger);
     const occ = scenarioOccurrence(scenario, snap.plan);
     const armed = this._confirm === key;
-    const busy = this._busy === key;
+    const busy = this._isBusy(key);
     const feedback = this._renderFeedback(scenario.id);
     const count = scenario.cover_ids.length;
     const runLabel = this._t("card_scn_run", { name: scenario.name });
@@ -1109,7 +1315,7 @@ export class AdvancedCoverCard extends LitElement {
       >
         <ha-icon icon=${trigger.icon}></ha-icon>
       </span>
-      <span class="scn-text">
+      <div class="scn-text">
         <div class="scn-name ellipsis">${scenario.name}</div>
         <div class="scn-sub">
           ${feedback !== nothing
@@ -1120,12 +1326,13 @@ export class AdvancedCoverCard extends LitElement {
                     : this._t("card_scn_no_covers")}</span
                 >`}
         </div>
-      </span>
+      </div>
       ${armed
         ? html`<span class="scn-confirm">
             <button
               type="button"
               class="btn small confirm"
+              data-confirm
               @click=${() => this._requestRun(key, scenario.id)}
             >
               <ha-icon icon="mdi:check"></ha-icon>
@@ -1150,7 +1357,7 @@ export class AdvancedCoverCard extends LitElement {
             class="play"
             title=${runLabel}
             aria-label=${runLabel}
-            .disabled=${!count || Boolean(this._busy)}
+            .disabled=${!count || busy}
             @click=${() => this._requestRun(key, scenario.id)}
           >
             <ha-icon
@@ -1165,7 +1372,8 @@ export class AdvancedCoverCard extends LitElement {
 
   private _renderCompact(snap: CardSnapshot): TemplateResult {
     const next = snap.enabled ? nextUp(snap.plan, Date.now()) : null;
-    const waiting = snap.enabled && waitingRuns(snap.plan).length > 0;
+    const waiting =
+      snap.enabled && waitingRuns(snap.plan, Date.now()).length > 0;
     let sub: string;
     if (!snap.enabled) {
       sub = this._t("card_off_title");
@@ -1177,24 +1385,30 @@ export class AdvancedCoverCard extends LitElement {
       sub = this._t(snap.plan.length ? "card_nothing_more" : "card_no_plan");
     }
     const showRun = next && this._cfg.next_actions.includes("run");
-    const armed = this._confirm === "next";
+    const key = next ? `next:${next.scenario_id}` : "";
+    const armed = Boolean(next) && this._confirm === key;
+    const busy = this._isBusy(key);
+    const outcome = next ? this._feedbackText(next.scenario_id) : null;
     return html`<ha-card>
       <div class="tile ${snap.enabled ? (waiting ? "warn" : "") : "off"}">
         <span class="tile-icon">
           <ha-icon icon="mdi:window-shutter-cog"></ha-icon>
         </span>
-        <span class="tile-text">
+        <div class="tile-text">
           <div class="tile-title ellipsis">
             ${this._config?.title || snap.name}
           </div>
-          <div class="tile-sub ellipsis">${this._actionError ?? sub}</div>
-        </span>
+          <div class="tile-sub ellipsis" role="status">
+            ${this._actionError ?? outcome ?? sub}
+          </div>
+        </div>
         ${showRun
           ? armed
             ? html`<button
                 type="button"
                 class="btn small confirm"
-                @click=${() => this._requestRun("next", next.scenario_id)}
+                data-confirm
+                @click=${() => this._requestRun(key, next.scenario_id)}
               >
                 <ha-icon icon="mdi:check"></ha-icon>
                 ${this._t(
@@ -1208,12 +1422,12 @@ export class AdvancedCoverCard extends LitElement {
                 class="play"
                 title=${this._t("card_action_run")}
                 aria-label=${this._t("card_action_run")}
-                .disabled=${Boolean(this._busy)}
-                @click=${() => this._requestRun("next", next.scenario_id)}
+                .disabled=${busy}
+                @click=${() => this._requestRun(key, next.scenario_id)}
               >
                 <ha-icon
-                  class=${this._busy === "next" ? "spin" : ""}
-                  icon=${this._busy === "next" ? "mdi:loading" : "mdi:play"}
+                  class=${busy ? "spin" : ""}
+                  icon=${busy ? "mdi:loading" : "mdi:play"}
                 ></ha-icon>
               </button>`
           : this._statePill(snap)}

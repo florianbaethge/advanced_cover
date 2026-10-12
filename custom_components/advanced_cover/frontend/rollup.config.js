@@ -11,7 +11,7 @@ const version = readFileSync(versionPath, "utf-8").trim();
 // `config_panel` keys the Lovelace card needs: its own (`card_`) plus the
 // shared status/condition/reason texts it renders through panel modules.
 const CARD_KEY_RE =
-  /^(card_|cond_sum_|cond_op_|contact_|reason_|status_|preflight_|today_legend_|covers_no_area$)/;
+  /^(card_|cond_sum_|cond_op_|contact_|reason_|status_|preflight_|today_legend_|covers_no_area$|errors_request_failed$)/;
 
 /**
  * `virtual:card-translations` — the card's strings, cut out of the

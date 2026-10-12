@@ -32,7 +32,7 @@ const PLAN = [
     { status: "idle", target_position: 0 },
     { status: "idle", target_position: 20 },
   ]),
-  occ("night", "22:00", false),
+  occ("night", "22:00", false, [{ status: "idle", target_position: 0 }]),
 ];
 
 test("nextUp is the earliest block that has not fired yet", () => {
@@ -43,17 +43,39 @@ test("nextUp is the earliest block that has not fired yet", () => {
 });
 
 test("a block whose time passed without firing is not coming up any more", () => {
-  const stale = [occ("late", "09:00", false), occ("later", "20:00", false)];
+  const run = [{ status: "idle", target_position: 0 }];
+  const stale = [occ("late", "09:00", false, run), occ("later", "20:00", false, run)];
   assert.equal(nextUp(stale, ms("12:00")).scenario_id, "later");
+});
+
+test("a block without covers moves nothing and is not next", () => {
+  const plan = [
+    occ("empty", "15:00", false),
+    occ("real", "16:00", false, [{ status: "idle", target_position: 0 }]),
+  ];
+  assert.equal(nextUp(plan, ms("14:00")).scenario_id, "real");
+  assert.equal(nextUp([plan[0]], ms("14:00")), null);
 });
 
 test("lastRun is the latest fired block, waitingRuns the armed ones", () => {
   assert.equal(lastRun(PLAN).scenario_id, "noon");
   assert.equal(lastRun([occ("a", "09:00", false)]), null);
   assert.deepEqual(
-    waitingRuns(PLAN).map((o) => o.scenario_id),
+    waitingRuns(PLAN, ms("14:00")).map((o) => o.scenario_id),
     ["noon"]
   );
+});
+
+test("a cover armed for its own later turn is not waiting for a condition", () => {
+  const facade = [
+    occ("facade", "09:00", true, [
+      { status: "done", target_position: 0 },
+      { status: "armed", target_position: 0, fire_at: at("16:40") },
+    ]),
+  ];
+  assert.deepEqual(waitingRuns(facade, ms("12:00")), []);
+  // Past its turn and still armed: now it does wait (retry window).
+  assert.equal(waitingRuns(facade, ms("17:00")).length, 1);
 });
 
 test("leadTime splits into hours and minutes and never goes negative", () => {
@@ -113,4 +135,7 @@ test("runResultCounts only counts this scenario's entries since the run", () => 
     ["skipped", 1],
   ]);
   assert.deepEqual(runResultCounts(log, "s", ms("15:00")), []);
+  // The mark is the server time of the last snapshot: what was logged up to
+  // and including that instant is older than the run.
+  assert.deepEqual(runResultCounts(log, "s", ms("14:10")), []);
 });
