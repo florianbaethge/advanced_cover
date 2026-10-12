@@ -2,7 +2,8 @@
   "domain": "advanced_cover",
   "name": "Advanced Cover",
   "after_dependencies": [
-    "frontend"
+    "frontend",
+    "lovelace"
   ],
   "codeowners": [
     "@florianbaethge"
@@ -19,5 +20,5 @@
   "issue_tracker": "https://github.com/florianbaethge/advanced_cover/issues",
   "requirements": [],
   "single_config_entry": true,
-  "version": "0.8.0"
+  "version": "0.9.0"
 }

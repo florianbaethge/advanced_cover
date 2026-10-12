@@ -55,19 +55,64 @@ export const navigate = (_node: unknown, path: string, replace = false): void =>
   fireEvent(window, "location-changed", { replace });
 };
 
-/** "HH:MM" for an ISO timestamp in the user's locale. */
+/* Time zone the times on screen are shown in. `undefined` is the browser's
+   own zone; set per render from the user's profile via `useTimeZone`. */
+let activeZone: string | undefined;
+let zoneParts: Intl.DateTimeFormat | undefined;
+
+/**
+ * Follow the user's time zone setting, as Home Assistant's own UI does: the
+ * browser's zone by default, Home Assistant's when the profile says "server".
+ * That is the setting for a tablet or a traveller whose device runs on
+ * another clock than the house — without it the day strip would be laid out
+ * around the device's midnight instead of the plan's.
+ */
+export function useTimeZone(hass: HomeAssistant | undefined): void {
+  const wanted =
+    hass?.locale?.time_zone === "server" ? hass.config?.time_zone : undefined;
+  if (wanted === activeZone) return;
+  zoneParts = undefined;
+  activeZone = undefined;
+  if (!wanted) return;
+  try {
+    // Throws a RangeError for a zone this browser does not know.
+    zoneParts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: wanted,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    });
+    activeZone = wanted;
+  } catch {
+    /* keep the browser's zone */
+  }
+}
+
+/** "HH:MM" for an ISO timestamp in the user's locale and time zone. */
 export function formatTime(iso: string | null | undefined): string {
   if (!iso) return "–";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "–";
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: activeZone,
+  });
 }
 
-/** Minutes since local midnight for an ISO timestamp (for timeline placement). */
+/** Minutes since midnight for an ISO timestamp (for timeline placement), in
+    the same zone `formatTime` prints. */
 export function minutesOfDay(iso: string): number | null {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
-  return d.getHours() * 60 + d.getMinutes();
+  if (!zoneParts) return d.getHours() * 60 + d.getMinutes();
+  let hour = 0;
+  let minute = 0;
+  for (const part of zoneParts.formatToParts(d)) {
+    if (part.type === "hour") hour = Number(part.value);
+    else if (part.type === "minute") minute = Number(part.value);
+  }
+  return hour * 60 + minute;
 }
 
 /** Days per month of a yearless date; February includes the leap day. */

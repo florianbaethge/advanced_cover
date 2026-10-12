@@ -20,7 +20,7 @@ from homeassistant.components.cover import (
     DOMAIN as COVER_DOMAIN,
 )
 from homeassistant.const import ATTR_ENTITY_ID
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import CALLBACK_TYPE, Context, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.sun import get_astral_event_date
 from homeassistant.util import dt as dt_util
@@ -38,6 +38,7 @@ from .const import (
     SAFETY_MODE_CLAMP,
     SAFETY_MODE_IGNORE,
     SCRIPT_DOMAIN,
+    SUBSCRIBERS_KEY,
     SUN_ENTITY_ID,
 )
 from .coordinator import AdvancedCoverCoordinator
@@ -343,15 +344,56 @@ def _scenario_warnings(
     return warnings
 
 
-def _snapshot(
+@callback
+def async_track_subscription(
     hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
     coordinator: AdvancedCoverCoordinator,
-    scheduler: AdvancedCoverScheduler,
-) -> dict[str, Any]:
-    """Full panel state for one entry."""
-    data = coordinator.data_model
+    push: CALLBACK_TYPE,
+) -> None:
+    """Run ``push`` on every coordinator update until the client or entry goes.
+
+    When the entry is unloaded the subscriber gets one last ``{"unloaded":
+    true}`` event instead of silence, so the panel or card can subscribe again
+    once the entry is back (a reload) rather than showing a frozen day
+    forever — and nothing keeps the old coordinator alive.
+    """
+    entry_id = coordinator.config_entry.entry_id
+    subscribers: set[CALLBACK_TYPE] = hass.data.setdefault(
+        SUBSCRIBERS_KEY, {}
+    ).setdefault(entry_id, set())
+    stop_listening = coordinator.async_add_listener(push)
+
+    @callback
+    def _release() -> None:
+        """Drop the listener and tell the client its entry went away."""
+        stop_listening()
+        connection.subscriptions.pop(msg["id"], None)
+        connection.send_message(
+            websocket_api.event_message(msg["id"], {"unloaded": True})
+        )
+
+    @callback
+    def _unsubscribe() -> None:
+        stop_listening()
+        subscribers.discard(_release)
+
+    subscribers.add(_release)
+    connection.subscriptions[msg["id"]] = _unsubscribe
+
+
+@callback
+def async_release_subscribers(hass: HomeAssistant, entry_id: str) -> None:
+    """Detach every panel and card subscribed to an entry being unloaded."""
+    subscribers = hass.data.get(SUBSCRIBERS_KEY, {}).pop(entry_id, set())
+    for release in list(subscribers):
+        release()
+
+
+def _sun_times(hass: HomeAssistant) -> dict[str, str | None]:
+    """Today's sunrise, sunset and solar noon as local ISO timestamps."""
     today = dt_util.now().date()
-    now_iso = dt_util.now().isoformat()
     sun: dict[str, str | None] = {}
     for event, astral in (
         ("sunrise", "sunrise"),
@@ -360,6 +402,18 @@ def _snapshot(
     ):
         when = get_astral_event_date(hass, astral, today)
         sun[event] = dt_util.as_local(when).isoformat() if when else None
+    return sun
+
+
+def _snapshot(
+    hass: HomeAssistant,
+    coordinator: AdvancedCoverCoordinator,
+    scheduler: AdvancedCoverScheduler,
+) -> dict[str, Any]:
+    """Full panel state for one entry."""
+    data = coordinator.data_model
+    now_iso = dt_util.now().isoformat()
+    sun = _sun_times(hass)
     return {
         "entry_id": coordinator.config_entry.entry_id,
         "config": data.config.to_dict(),
@@ -474,7 +528,7 @@ def ws_subscribe(
             )
         )
 
-    connection.subscriptions[msg["id"]] = coordinator.async_add_listener(_push)
+    async_track_subscription(hass, connection, msg, coordinator, _push)
     connection.send_result(msg["id"])
     _push()
 
@@ -678,6 +732,67 @@ def ws_cover_probe(
     connection.send_result(msg["id"], result)
 
 
+async def async_drive_cover(
+    hass: HomeAssistant,
+    cover: CoverItem,
+    command: str,
+    position: int | None = None,
+    *,
+    context: Context | None = None,
+) -> None:
+    """Drive a cover directly (panel test buttons, dashboard card controls).
+
+    Manual low mode: open, close and position drive the low-speed entity (or
+    script) instead of the normal cover entity. Stop always goes to the normal
+    entity: a script cannot stop a running move, and the panel promises one
+    rule for both kinds of low mode.
+
+    ``context`` carries the calling user, so Home Assistant applies that
+    user's entity permissions and the logbook names who moved the cover.
+    """
+    service_map = {
+        "open": SERVICE_OPEN_COVER,
+        "close": SERVICE_CLOSE_COVER,
+        "stop": SERVICE_STOP_COVER,
+    }
+    entity_id = cover.cover_entity_id
+    if command == "stop":
+        pass
+    elif cover.manual_low_mode and cover.low_mode_entity_id:
+        entity_id = cover.low_mode_entity_id
+    elif cover.manual_low_mode and cover.low_mode_script_id:
+        target = {"open": 100, "close": 0}.get(
+            command, 50 if position is None else position
+        )
+        await hass.services.async_call(
+            SCRIPT_DOMAIN,
+            cover.low_mode_script_id.split(".", 1)[-1],
+            {"position": target},
+            blocking=True,
+            context=context,
+        )
+        return
+    if command == "position":
+        await hass.services.async_call(
+            COVER_DOMAIN,
+            SERVICE_SET_COVER_POSITION,
+            {
+                ATTR_ENTITY_ID: entity_id,
+                ATTR_POSITION: 50 if position is None else position,
+            },
+            blocking=True,
+            context=context,
+        )
+        return
+    await hass.services.async_call(
+        COVER_DOMAIN,
+        service_map[command],
+        {ATTR_ENTITY_ID: entity_id},
+        blocking=True,
+        context=context,
+    )
+
+
 @websocket_api.websocket_command(
     {
         vol.Required("type"): f"{DOMAIN}/covers/test",
@@ -702,45 +817,13 @@ async def ws_cover_test(
     if cover is None:
         connection.send_error(msg["id"], ERR_NOT_FOUND, "Unknown cover item")
         return
-    service_map = {
-        "open": SERVICE_OPEN_COVER,
-        "close": SERVICE_CLOSE_COVER,
-        "stop": SERVICE_STOP_COVER,
-    }
-    command = msg["command"]
-    # Manual low mode: the panel controls drive the low-speed entity (or
-    # script) instead of the normal cover entity. Stop always goes to the
-    # normal entity — scripts cannot stop a running move.
-    entity_id = cover.cover_entity_id
-    if cover.manual_low_mode and cover.low_mode_entity_id:
-        entity_id = cover.low_mode_entity_id
-    elif cover.manual_low_mode and cover.low_mode_script_id and command != "stop":
-        position = {"open": 100, "close": 0}.get(command, msg.get("position", 50))
-        await hass.services.async_call(
-            SCRIPT_DOMAIN,
-            cover.low_mode_script_id.split(".", 1)[-1],
-            {"position": position},
-            blocking=True,
-        )
-        connection.send_result(msg["id"], {"success": True})
-        return
-    if command == "position":
-        await hass.services.async_call(
-            COVER_DOMAIN,
-            SERVICE_SET_COVER_POSITION,
-            {
-                ATTR_ENTITY_ID: entity_id,
-                ATTR_POSITION: msg.get("position", 50),
-            },
-            blocking=True,
-        )
-    else:
-        await hass.services.async_call(
-            COVER_DOMAIN,
-            service_map[command],
-            {ATTR_ENTITY_ID: entity_id},
-            blocking=True,
-        )
+    await async_drive_cover(
+        hass,
+        cover,
+        msg["command"],
+        msg.get("position"),
+        context=connection.context(msg),
+    )
     connection.send_result(msg["id"], {"success": True})
 
 

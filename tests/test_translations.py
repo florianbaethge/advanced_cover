@@ -27,6 +27,9 @@ REFERENCE = "en"
 
 # `t(hass, "config_panel.tab_today")` -- the literal keys used by the panel.
 T_CALL_RE = re.compile(r"""\bt\(\s*[\w.?]+\s*,\s*["']([^"']+)["']""")
+# `this._t("card_next_up")` -- the card's own shorthand for the same lookup.
+CARD_T_CALL_RE = re.compile(r"""\b_t\(\s*["']([\w]+)["']""")
+CARD_SRC_DIR = FRONTEND_SRC_DIR / "card"
 PLACEHOLDER_RE = re.compile(r"\{\s*(\w+)")
 # hassfest rejects ICU plurals in translation files, `hass.localize` accepts them.
 ICU_PLURAL_RE = re.compile(r"\{\s*\w+\s*,\s*(plural|select|selectordinal)\s*,")
@@ -129,6 +132,17 @@ def test_frontend_keys_exist_in_reference() -> None:
         used.update(T_CALL_RE.findall(path.read_text(encoding="utf-8")))
     unknown = sorted(used - reference)
     assert not unknown, f"frontend uses keys missing from {REFERENCE}.json: {unknown}"
+
+
+def test_card_keys_exist_in_reference() -> None:
+    """The card resolves `_t("key")` against `config_panel`, bundled at build time."""
+    reference = set(_load(REFERENCE))
+    used: set[str] = set()
+    for path in CARD_SRC_DIR.rglob("*.ts"):
+        used.update(CARD_T_CALL_RE.findall(path.read_text(encoding="utf-8")))
+    assert used, "no card keys found -- did the card's `_t` helper change?"
+    unknown = sorted(key for key in used if f"config_panel.{key}" not in reference)
+    assert not unknown, f"card uses keys missing from {REFERENCE}.json: {unknown}"
 
 
 def test_translation_coverage() -> None:

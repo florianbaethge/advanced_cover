@@ -1,0 +1,156 @@
+import type { AssignmentRun, LogEntry, Occurrence } from "../types";
+import type { CardCover, CardScenario } from "./types";
+
+/* Pure read-model helpers for the card — no DOM, no lit, unit-tested. */
+
+const time = (iso: string | null | undefined): number => {
+  const ms = iso ? new Date(iso).getTime() : NaN;
+  return Number.isNaN(ms) ? 0 : ms;
+};
+
+/** Stable key of one plan block (same shape the panel uses). */
+export const occKey = (occ: Occurrence): string =>
+  `${occ.scenario_id}@${occ.planned_at}`;
+
+/** What moves next: a block, when, and which of its covers. */
+export interface UpNext {
+  occ: Occurrence;
+  at: string;
+  runs: AssignmentRun[];
+}
+
+/** The next thing the plan will do, or null when the day is done.
+
+    Usually a block that has not fired yet, with all its covers. A
+    facade-relative block is different: it fires with its first facade and
+    keeps the other covers armed for their own, later turn — those turns are
+    still "next" although the block counts as fired. A block without covers
+    moves nothing and is never next (the backend's next-run sensor skips it
+    too). */
+export function nextUp(plan: Occurrence[], nowMs: number): UpNext | null {
+  const candidates: UpNext[] = [];
+  for (const occ of plan) {
+    if (!occ.assignments.length) continue;
+    if (!occ.fired) {
+      if (time(occ.planned_at) >= nowMs) {
+        candidates.push({ occ, at: occ.planned_at, runs: occ.assignments });
+      }
+      continue;
+    }
+    const pending = occ.assignments
+      .filter(
+        (run) =>
+          run.status === "armed" && run.fire_at && time(run.fire_at) > nowMs
+      )
+      .sort((a, b) => time(a.fire_at) - time(b.fire_at));
+    if (pending.length) {
+      candidates.push({ occ, at: pending[0].fire_at!, runs: pending });
+    }
+  }
+  candidates.sort((a, b) => time(a.at) - time(b.at));
+  return candidates[0] ?? null;
+}
+
+/** The block that fired most recently, or null before the first one. */
+export function lastRun(plan: Occurrence[]): Occurrence | null {
+  const fired = plan
+    .filter((occ) => occ.fired)
+    .sort((a, b) => time(b.planned_at) - time(a.planned_at));
+  return fired[0] ?? null;
+}
+
+/** Blocks with a run that fired but still waits for its conditions.
+
+    A facade-relative scenario also keeps covers armed — until the sun reaches
+    their side. That is a cover waiting for its turn, not for a condition. */
+export function waitingRuns(plan: Occurrence[], nowMs: number): Occurrence[] {
+  return plan.filter(
+    (occ) =>
+      occ.fired &&
+      occ.assignments.some(
+        (run) =>
+          run.status === "armed" && !(run.fire_at && time(run.fire_at) > nowMs)
+      )
+  );
+}
+
+/** Whole hours and minutes until `targetMs`; never negative. */
+export function leadTime(
+  targetMs: number,
+  nowMs: number
+): { h: number; m: number } {
+  const total = Math.max(0, Math.round((targetMs - nowMs) / 60000));
+  return { h: Math.floor(total / 60), m: total % 60 };
+}
+
+/** "30 %" for one target, "30–80 %" when the covers differ. */
+export function positionsLabel(positions: number[]): string {
+  if (!positions.length) return "–";
+  const low = Math.min(...positions);
+  const high = Math.max(...positions);
+  return low === high ? `${low} %` : `${low}–${high} %`;
+}
+
+/** Distinct targets of a set of runs (a block's covers, or some of them). */
+export function runPositions(runs: AssignmentRun[]): number[] {
+  return [...new Set(runs.map((run) => run.target_position))];
+}
+
+/** Distinct targets of one plan block's covers. */
+export function occPositions(occ: Occurrence): number[] {
+  return runPositions(occ.assignments);
+}
+
+/** Today's block of a scenario — the upcoming one first, else the last fired. */
+export function scenarioOccurrence(
+  scenario: CardScenario,
+  plan: Occurrence[]
+): Occurrence | null {
+  const own = plan.filter((occ) => occ.scenario_id === scenario.id);
+  return own.find((occ) => !occ.fired) ?? own[own.length - 1] ?? null;
+}
+
+/** Keep the configured selection, in the integration's own order. */
+export function pick<T extends { id: string }>(
+  items: T[],
+  selection: "all" | string[] | undefined
+): T[] {
+  if (!Array.isArray(selection)) return items;
+  return items.filter((item) => selection.includes(item.id));
+}
+
+/** Covers bucketed by area, areas in first-seen order, "no area" last. */
+export function groupByArea(
+  covers: CardCover[]
+): Array<[string | null, CardCover[]]> {
+  const groups = new Map<string | null, CardCover[]>();
+  for (const cover of covers) {
+    const key = cover.area_id ?? null;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(cover);
+  }
+  const entries = [...groups.entries()];
+  return [
+    ...entries.filter(([area]) => area !== null),
+    ...entries.filter(([area]) => area === null),
+  ];
+}
+
+/** Per-result counts of a manual run, read back from the action log.
+
+    A manual run answers with a bare "ok"; what each cover did only shows up
+    as log entries. Everything logged for the scenario after `sinceMs` is
+    that run. `sinceMs` must be on the server's clock — the log is stamped
+    there, and a browser a few seconds off would miss or over-count. */
+export function runResultCounts(
+  log: LogEntry[],
+  scenarioId: string,
+  sinceMs: number
+): Array<[string, number]> {
+  const counts = new Map<string, number>();
+  for (const entry of log) {
+    if (entry.scenario_id !== scenarioId || time(entry.time) <= sinceMs) continue;
+    counts.set(entry.result, (counts.get(entry.result) ?? 0) + 1);
+  }
+  return [...counts.entries()];
+}

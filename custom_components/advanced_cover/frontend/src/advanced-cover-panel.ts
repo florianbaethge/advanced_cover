@@ -1,6 +1,6 @@
 import { LitElement, html, nothing } from "lit";
 import { fetchState, listEntries, subscribeState } from "./data/api";
-import { defineCustomElementOnce, navigate } from "./helpers";
+import { defineCustomElementOnce, navigate, useTimeZone } from "./helpers";
 import { t, TRANSLATION_DOMAIN } from "./i18n";
 import { loadHaPanelElements } from "./load-ha-elements";
 import { exportPath, getEditScenarioQuery, getPath } from "./navigation";
@@ -52,6 +52,8 @@ export class AdvancedCoverPanel extends LitElement {
   private _entriesLoading = false;
 
   private _unsub?: () => Promise<void>;
+
+  private _resubscribeTimer?: number;
   private _subscribedEntryId?: string;
 
   /** Language we last loaded `config_panel` for (HA does not auto-load it for panel_custom). */
@@ -110,6 +112,7 @@ export class AdvancedCoverPanel extends LitElement {
     super.disconnectedCallback();
     window.removeEventListener("location-changed", this._locChanged);
     document.removeEventListener("visibilitychange", this._onVisibility);
+    window.clearTimeout(this._resubscribeTimer);
     void this._teardownSubscription();
   }
 
@@ -156,6 +159,14 @@ export class AdvancedCoverPanel extends LitElement {
     this._subscribedEntryId = entryId;
     try {
       const unsubPromise = subscribeState(this.hass, entryId, (snapshot) => {
+        if ("unloaded" in snapshot) {
+          // The entry was unloaded (a reload): this subscription is over.
+          // Keep the last state on screen and come back for the new one.
+          this._unsub = undefined;
+          this._subscribedEntryId = undefined;
+          this._resubscribeSoon(entryId);
+          return;
+        }
         this._snapshot = snapshot;
         this._loading = false;
         this._error = undefined;
@@ -174,6 +185,22 @@ export class AdvancedCoverPanel extends LitElement {
       this._subscribedEntryId = undefined;
     }
     this.requestUpdate();
+  }
+
+  /** Subscribe again after the entry was unloaded; a reload takes a moment,
+      so a few tries, then the error of the last one stays on screen. */
+  private _resubscribeSoon(entryId: string, attempt = 0): void {
+    window.clearTimeout(this._resubscribeTimer);
+    this._resubscribeTimer = window.setTimeout(
+      async () => {
+        if (getPath().entryId !== entryId || !this.isConnected) return;
+        await this._ensureSubscription(entryId);
+        if (this._subscribedEntryId !== entryId && attempt < 5) {
+          this._resubscribeSoon(entryId, attempt + 1);
+        }
+      },
+      2000 * (attempt + 1)
+    );
   }
 
   private async _reloadPath(): Promise<void> {
@@ -245,6 +272,8 @@ export class AdvancedCoverPanel extends LitElement {
     if (!this.hass || !this._initialPanelI18nDone) {
       return html`<div class="view"><div class="view-inner">Loading…</div></div>`;
     }
+    // Before the views render: they print and place times through helpers.
+    useTimeZone(this.hass);
 
     const path = getPath();
     const page = normalizePage(path.page);

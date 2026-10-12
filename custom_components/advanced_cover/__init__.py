@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 from homeassistant.helpers import config_validation as cv
 
 from .const import (
+    CARD_API_REGISTERED_KEY,
+    CARD_REGISTERED_KEY,
     DOMAIN,
     HASS_CONFIG_KEY,
     PANEL_REGISTERED_KEY,
@@ -83,11 +85,41 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await scheduler.async_setup()
     coordinator.async_setup_state_tracking()
 
+    await _async_register_frontend(hass)
+
+    return True
+
+
+async def _async_register_frontend(hass: HomeAssistant) -> None:
+    """Register the WebSocket APIs, the Lovelace card and the sidebar panel.
+
+    Everything here is per Home Assistant instance, not per entry, hence the
+    ``hass.data`` flags.
+    """
     if not hass.data.get(WEBSOCKET_REGISTERED_KEY):
         from .websocket import async_register_websocket_api
 
         async_register_websocket_api(hass)
         hass.data[WEBSOCKET_REGISTERED_KEY] = True
+
+    if not hass.data.get(CARD_API_REGISTERED_KEY):
+        from .card_api import async_register_card_api
+
+        async_register_card_api(hass)
+
+    if not hass.data.get(CARD_REGISTERED_KEY):
+        # Claim before the first await: entries of this domain set up
+        # concurrently, and a second pass would re-register the static route.
+        hass.data[CARD_REGISTERED_KEY] = True
+        try:
+            from .card import async_register_card
+
+            await async_register_card(hass)
+        except Exception:
+            # The card is an extra: by now the scheduler runs and the entities
+            # exist, and a Lovelace hiccup must not take the entry down with it.
+            hass.data.pop(CARD_REGISTERED_KEY, None)
+            _LOGGER.exception("Could not register the dashboard card")
 
     if not hass.data.get(PANEL_REGISTERED_KEY):
         # Claim the flag before the first await: entries of this domain are
@@ -109,8 +141,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except Exception:
             hass.data.pop(PANEL_REGISTERED_KEY, None)
             raise
-
-    return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -134,6 +164,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, platforms)
     if unload_ok and entry.entry_id in hass.data.get(DOMAIN, {}):
         hass.data[DOMAIN].pop(entry.entry_id)
+    if unload_ok:
+        from .websocket import async_release_subscribers
+
+        # Open panels and cards hang on the coordinator that just went away;
+        # tell them, so they subscribe again once the entry is back.
+        async_release_subscribers(hass, entry.entry_id)
 
     if unload_ok and hass.data.get(PANEL_REGISTERED_KEY):
         from homeassistant.config_entries import ConfigEntryState
@@ -160,3 +196,18 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     await store.async_remove()
     runtime_store = AdvancedCoverRuntimeStore(hass, entry.entry_id)
     await runtime_store.async_remove()
+
+    others = [
+        other
+        for other in hass.config_entries.async_entries(DOMAIN)
+        if other.entry_id != entry.entry_id
+    ]
+    if not others:
+        from .card import async_unregister_card
+
+        try:
+            await async_unregister_card(hass)
+        except Exception:
+            _LOGGER.exception("Could not remove the dashboard card resource")
+        # Adding the integration again without a restart registers it anew.
+        hass.data.pop(CARD_REGISTERED_KEY, None)

@@ -157,21 +157,69 @@ const navigate = (_node, path, replace = false) => {
     }
     fireEvent(window, "location-changed", { replace });
 };
-/** "HH:MM" for an ISO timestamp in the user's locale. */
+/* Time zone the times on screen are shown in. `undefined` is the browser's
+   own zone; set per render from the user's profile via `useTimeZone`. */
+let activeZone;
+let zoneParts;
+/**
+ * Follow the user's time zone setting, as Home Assistant's own UI does: the
+ * browser's zone by default, Home Assistant's when the profile says "server".
+ * That is the setting for a tablet or a traveller whose device runs on
+ * another clock than the house — without it the day strip would be laid out
+ * around the device's midnight instead of the plan's.
+ */
+function useTimeZone(hass) {
+    const wanted = hass?.locale?.time_zone === "server" ? hass.config?.time_zone : undefined;
+    if (wanted === activeZone)
+        return;
+    zoneParts = undefined;
+    activeZone = undefined;
+    if (!wanted)
+        return;
+    try {
+        // Throws a RangeError for a zone this browser does not know.
+        zoneParts = new Intl.DateTimeFormat("en-GB", {
+            timeZone: wanted,
+            hour: "2-digit",
+            minute: "2-digit",
+            hourCycle: "h23",
+        });
+        activeZone = wanted;
+    }
+    catch {
+        /* keep the browser's zone */
+    }
+}
+/** "HH:MM" for an ISO timestamp in the user's locale and time zone. */
 function formatTime(iso) {
     if (!iso)
         return "–";
     const d = new Date(iso);
     if (Number.isNaN(d.getTime()))
         return "–";
-    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZone: activeZone,
+    });
 }
-/** Minutes since local midnight for an ISO timestamp (for timeline placement). */
+/** Minutes since midnight for an ISO timestamp (for timeline placement), in
+    the same zone `formatTime` prints. */
 function minutesOfDay(iso) {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime()))
         return null;
-    return d.getHours() * 60 + d.getMinutes();
+    if (!zoneParts)
+        return d.getHours() * 60 + d.getMinutes();
+    let hour = 0;
+    let minute = 0;
+    for (const part of zoneParts.formatToParts(d)) {
+        if (part.type === "hour")
+            hour = Number(part.value);
+        else if (part.type === "minute")
+            minute = Number(part.value);
+    }
+    return hour * 60 + minute;
 }
 /** Days per month of a yearless date; February includes the leap day. */
 const DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
@@ -5913,6 +5961,128 @@ class ViewScenarios extends i$2 {
 }
 defineCustomElementOnce("ac-view-scenarios", ViewScenarios);
 
+/* Display status of today's plan blocks — shared by the panel's Today view
+   and the Lovelace card, so both always tell the same story. */
+/** Aggregate display kind of a block: preflight verdict, or real result. */
+function occKind(occ) {
+    if (!occ.fired)
+        return occVerdict(occ);
+    const runs = occ.assignments;
+    if (runs.some((r) => r.status === "armed"))
+        return "armed";
+    if (runs.some((r) => r.result === "blocked_safety"))
+        return "blocked_safety";
+    if (runs.some((r) => r.result === "unavailable"))
+        return "unavailable";
+    if (runs.some((r) => r.result === "executed"))
+        return "executed";
+    if (runs.some((r) => r.result === "expired"))
+        return "expired";
+    return "skipped";
+}
+/** Per-result counts of a fired block's runs, in display order.
+
+    Unknown result strings are appended verbatim so no outcome is ever
+    silently dropped from the badge row. */
+const COUNT_ORDER = [
+    "executed",
+    "armed",
+    "skipped",
+    "expired",
+    "unavailable",
+    "blocked_safety",
+];
+function occStatusCounts(occ) {
+    const counts = new Map();
+    for (const r of occ.assignments) {
+        const kind = r.status === "armed" ? "armed" : (r.result ?? "skipped");
+        counts.set(kind, (counts.get(kind) ?? 0) + 1);
+    }
+    const ordered = COUNT_ORDER.filter((k) => counts.has(k)).map((k) => [k, counts.get(k)]);
+    for (const [k, n] of counts) {
+        if (!COUNT_ORDER.includes(k))
+            ordered.push([k, n]);
+    }
+    return ordered;
+}
+/** Most common reason among a fired block's non-executed runs, localized.
+
+    Everyday outcomes ("trigger already passed", "already in position") are
+    left out entirely — the status badge says it all; a wall of orange text
+    on every block would drown out the reasons that matter. Shown collapsed
+    only when the whole block failed: as soon as one cover executed, the
+    problem is per-cover, the count badges tell the story and the details
+    live in the expanded view. */
+function occReasonSummary(hass, occ) {
+    if (!occ.fired)
+        return null;
+    if (occ.assignments.some((r) => r.result === "executed"))
+        return null;
+    const counts = new Map();
+    for (const r of occ.assignments) {
+        if (r.result === "executed" || !r.reason)
+            continue;
+        if (reasonSeverity(r.reason) === "noise")
+            continue;
+        counts.set(r.reason, (counts.get(r.reason) ?? 0) + 1);
+    }
+    const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+    if (!top)
+        return null;
+    const text = formatReason(hass, top[0]);
+    if (!text)
+        return null;
+    return top[1] > 1 ? `${text} (${top[1]}×)` : text;
+}
+/** Map a block to a timeline marker color class.
+
+    A fired block with executed covers *and* real problems (blocked /
+    unavailable) renders as a green dot with a red ring: mostly fine, but
+    something needs attention. */
+function timelineClass(occ) {
+    const kind = occKind(occ);
+    if (kind === "would_run")
+        return "will_run";
+    if (occ.fired && occ.assignments.some((r) => r.result === "executed")) {
+        const problems = occ.assignments.some((r) => ["blocked_safety", "unavailable"].includes(r.result ?? ""));
+        if (problems)
+            return "executed_partial";
+    }
+    return kind;
+}
+/** Per-cover run kind for the grouped list. */
+function runKind(occ, run) {
+    if (!occ.fired)
+        return run.preflight?.verdict ?? "would_run";
+    if (run.status === "armed")
+        return "armed";
+    return run.result ?? "skipped";
+}
+function occHasIssue(occ) {
+    if (occ.fired) {
+        return occ.assignments.some((r) => ["blocked_safety", "unavailable"].includes(r.result ?? ""));
+    }
+    if (occVerdict(occ) !== "would_run")
+        return true;
+    // Partially blocked blocks still deserve the issues filter.
+    return occ.assignments.some((r) => r.preflight && r.preflight.verdict !== "would_run");
+}
+/** Retry window of a block as an end minute on today's strip, or null.
+
+    Drawn only while it still matters: for upcoming blocks and for blocks
+    with armed runs. A window past midnight clamps to the end of the strip. */
+function retrySpanEnd(occ) {
+    if (!occ.retry_until ||
+        !(!occ.fired || occ.assignments.some((r) => r.status === "armed"))) {
+        return null;
+    }
+    const start = minutesOfDay(occ.planned_at);
+    if (start == null)
+        return null;
+    const end = minutesOfDay(occ.retry_until);
+    return end == null || end <= start ? 1440 : end;
+}
+
 /** Night → day → night gradient derived from the real sun times. */
 function dayGradient(sunriseMin, sunsetMin) {
     const night = "var(--ac-timeline-night)";
@@ -6170,110 +6340,6 @@ const timelineStyles = i$5 `
 `;
 
 const EXPAND_KEY = "ac-today-expanded";
-/** Aggregate display kind of a block: preflight verdict, or real result. */
-function occKind(occ) {
-    if (!occ.fired)
-        return occVerdict(occ);
-    const runs = occ.assignments;
-    if (runs.some((r) => r.status === "armed"))
-        return "armed";
-    if (runs.some((r) => r.result === "blocked_safety"))
-        return "blocked_safety";
-    if (runs.some((r) => r.result === "unavailable"))
-        return "unavailable";
-    if (runs.some((r) => r.result === "executed"))
-        return "executed";
-    if (runs.some((r) => r.result === "expired"))
-        return "expired";
-    return "skipped";
-}
-/** Per-result counts of a fired block's runs, in display order.
-
-    Unknown result strings are appended verbatim so no outcome is ever
-    silently dropped from the badge row. */
-const COUNT_ORDER = [
-    "executed",
-    "armed",
-    "skipped",
-    "expired",
-    "unavailable",
-    "blocked_safety",
-];
-function occStatusCounts(occ) {
-    const counts = new Map();
-    for (const r of occ.assignments) {
-        const kind = r.status === "armed" ? "armed" : (r.result ?? "skipped");
-        counts.set(kind, (counts.get(kind) ?? 0) + 1);
-    }
-    const ordered = COUNT_ORDER.filter((k) => counts.has(k)).map((k) => [k, counts.get(k)]);
-    for (const [k, n] of counts) {
-        if (!COUNT_ORDER.includes(k))
-            ordered.push([k, n]);
-    }
-    return ordered;
-}
-/** Most common reason among a fired block's non-executed runs, localized.
-
-    Everyday outcomes ("trigger already passed", "already in position") are
-    left out entirely — the status badge says it all; a wall of orange text
-    on every block would drown out the reasons that matter. Shown collapsed
-    only when the whole block failed: as soon as one cover executed, the
-    problem is per-cover, the count badges tell the story and the details
-    live in the expanded view. */
-function occReasonSummary(hass, occ) {
-    if (!occ.fired)
-        return null;
-    if (occ.assignments.some((r) => r.result === "executed"))
-        return null;
-    const counts = new Map();
-    for (const r of occ.assignments) {
-        if (r.result === "executed" || !r.reason)
-            continue;
-        if (reasonSeverity(r.reason) === "noise")
-            continue;
-        counts.set(r.reason, (counts.get(r.reason) ?? 0) + 1);
-    }
-    const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
-    if (!top)
-        return null;
-    const text = formatReason(hass, top[0]);
-    if (!text)
-        return null;
-    return top[1] > 1 ? `${text} (${top[1]}×)` : text;
-}
-/** Map a block to a timeline marker color class.
-
-    A fired block with executed covers *and* real problems (blocked /
-    unavailable) renders as a green dot with a red ring: mostly fine, but
-    something needs attention. */
-function timelineClass(occ) {
-    const kind = occKind(occ);
-    if (kind === "would_run")
-        return "will_run";
-    if (occ.fired && occ.assignments.some((r) => r.result === "executed")) {
-        const problems = occ.assignments.some((r) => ["blocked_safety", "unavailable"].includes(r.result ?? ""));
-        if (problems)
-            return "executed_partial";
-    }
-    return kind;
-}
-/** Per-cover run kind for the grouped list. */
-function runKind(occ, run) {
-    if (!occ.fired)
-        return run.preflight?.verdict ?? "would_run";
-    if (run.status === "armed")
-        return "armed";
-    return run.result ?? "skipped";
-}
-function occHasIssue(occ) {
-    if (occ.fired) {
-        return occ.assignments.some((r) => ["blocked_safety", "unavailable"].includes(r.result ?? ""));
-    }
-    if (occVerdict(occ) !== "would_run")
-        return true;
-    // Partially blocked blocks still deserve the issues filter.
-    return occ.assignments.some((r) => r.preflight && r.preflight.verdict !== "would_run");
-}
 class ViewToday extends i$2 {
     static { this.properties = {
         hass: { attribute: false },
@@ -6867,22 +6933,13 @@ class ViewToday extends i$2 {
             const m = minutesOfDay(occ.planned_at);
             if (m == null)
                 return null;
-            // Retry window: visualize when a not-yet-decided occurrence would
-            // still re-try (upcoming blocks and blocks with armed runs).
-            let spanEndMinute = null;
-            if (occ.retry_until &&
-                (!occ.fired || occ.assignments.some((r) => r.status === "armed"))) {
-                const end = minutesOfDay(occ.retry_until);
-                // A window past midnight clamps to the end of today's strip.
-                spanEndMinute = end == null || end <= m ? 1440 : end;
-            }
             return {
                 id: ViewToday._occKey(occ),
                 minute: m,
                 colorClass: timelineClass(occ),
                 label: `${formatTime(occ.planned_at)} · ${occ.scenario_name}`,
                 timeLabel: formatTime(occ.planned_at),
-                spanEndMinute,
+                spanEndMinute: retrySpanEnd(occ),
                 onClick: () => this._scrollToBlock(occ),
             };
         })
@@ -7205,7 +7262,7 @@ class ViewToday extends i$2 {
 }
 defineCustomElementOnce("ac-view-today", ViewToday);
 
-const VERSION = "0.8.0";
+const VERSION = "0.9.0";
 const PANEL_PAGES = ["today", "covers", "scenarios", "log"];
 const TAB_LABEL_KEYS = {
     today: "config_panel.tab_today",
@@ -7302,6 +7359,7 @@ class AdvancedCoverPanel extends i$2 {
         super.disconnectedCallback();
         window.removeEventListener("location-changed", this._locChanged);
         document.removeEventListener("visibilitychange", this._onVisibility);
+        window.clearTimeout(this._resubscribeTimer);
         void this._teardownSubscription();
     }
     async _teardownSubscription() {
@@ -7335,6 +7393,14 @@ class AdvancedCoverPanel extends i$2 {
         this._subscribedEntryId = entryId;
         try {
             const unsubPromise = subscribeState(this.hass, entryId, (snapshot) => {
+                if ("unloaded" in snapshot) {
+                    // The entry was unloaded (a reload): this subscription is over.
+                    // Keep the last state on screen and come back for the new one.
+                    this._unsub = undefined;
+                    this._subscribedEntryId = undefined;
+                    this._resubscribeSoon(entryId);
+                    return;
+                }
                 this._snapshot = snapshot;
                 this._loading = false;
                 this._error = undefined;
@@ -7355,6 +7421,19 @@ class AdvancedCoverPanel extends i$2 {
             this._subscribedEntryId = undefined;
         }
         this.requestUpdate();
+    }
+    /** Subscribe again after the entry was unloaded; a reload takes a moment,
+        so a few tries, then the error of the last one stays on screen. */
+    _resubscribeSoon(entryId, attempt = 0) {
+        window.clearTimeout(this._resubscribeTimer);
+        this._resubscribeTimer = window.setTimeout(async () => {
+            if (getPath().entryId !== entryId || !this.isConnected)
+                return;
+            await this._ensureSubscription(entryId);
+            if (this._subscribedEntryId !== entryId && attempt < 5) {
+                this._resubscribeSoon(entryId, attempt + 1);
+            }
+        }, 2000 * (attempt + 1));
     }
     async _reloadPath() {
         const { entryId } = getPath();
@@ -7425,6 +7504,8 @@ class AdvancedCoverPanel extends i$2 {
         if (!this.hass || !this._initialPanelI18nDone) {
             return b `<div class="view"><div class="view-inner">Loading…</div></div>`;
         }
+        // Before the views render: they print and place times through helpers.
+        useTimeZone(this.hass);
         const path = getPath();
         const page = normalizePage(path.page);
         if (!path.entryId) {

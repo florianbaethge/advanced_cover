@@ -20,7 +20,7 @@ export const fetchState = (
 export const subscribeState = (
   hass: HomeAssistant,
   entryId: string,
-  onState: (snapshot: PanelSnapshot) => void
+  onState: (snapshot: PanelSnapshot | { unloaded: true }) => void
 ): Promise<() => Promise<void>> | undefined =>
   hass.connection?.subscribeMessage(onState, {
     type: `${D}/subscribe`,

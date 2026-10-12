@@ -5,10 +5,14 @@ export interface HomeAssistant {
   states: HassEntities;
   config?: HassConfig;
   areas?: Record<string, { area_id: string; name: string }>;
+  user?: { is_admin?: boolean };
+  themes?: { darkMode?: boolean };
   locale?: {
     language: string;
     time_format: string;
     date_format: string;
+    /** "local" (the browser's zone) or "server" (Home Assistant's). */
+    time_zone?: string;
   };
   callWS<T>(msg: Record<string, unknown>): Promise<T>;
   callService?(
@@ -34,8 +38,14 @@ export interface HomeAssistant {
     ): Promise<() => Promise<void>>;
     subscribeMessage<Result>(
       callback: (result: Result) => void,
-      message: Record<string, unknown>
+      message: Record<string, unknown>,
+      options?: { resubscribe?: boolean }
     ): Promise<() => Promise<void>>;
+    addEventListener?(type: "ready" | "disconnected", listener: () => void): void;
+    removeEventListener?(
+      type: "ready" | "disconnected",
+      listener: () => void
+    ): void;
   };
   language?: string;
 }
@@ -171,6 +181,8 @@ export interface NextAction {
   position?: number;
   armed: boolean;
   armed_until?: string | null;
+  /** Facade-relative triggers: the armed cover's own turn. */
+  fire_at?: string | null;
   waiting_for?: string[];
 }
 
