@@ -32,6 +32,14 @@ WEBSOCKET_REGISTERED_KEY: Final = "_advanced_cover_websocket_registered"
 # (unlike PANEL_REGISTERED_KEY, which is cleared on unload).
 PANEL_STATIC_REGISTERED_KEY: Final = "_advanced_cover_panel_static_registered"
 
+# --- Lovelace card ---
+CARD_FILENAME: Final = "dist/advanced-cover-card.js"
+CARD_URL: Final = "/advanced_cover/advanced-cover-card.js"
+CARD_REGISTERED_KEY: Final = "_advanced_cover_card_registered"
+CARD_API_REGISTERED_KEY: Final = "_advanced_cover_card_api_registered"
+# Newest action-log entries the card snapshot carries (run feedback only).
+CARD_LOG_SIZE: Final = 30
+
 STORE_VERSION: Final = 1
 
 # --- Cover kinds (presentation only, never engine logic) ---

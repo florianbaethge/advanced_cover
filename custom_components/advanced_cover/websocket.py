@@ -343,15 +343,9 @@ def _scenario_warnings(
     return warnings
 
 
-def _snapshot(
-    hass: HomeAssistant,
-    coordinator: AdvancedCoverCoordinator,
-    scheduler: AdvancedCoverScheduler,
-) -> dict[str, Any]:
-    """Full panel state for one entry."""
-    data = coordinator.data_model
+def _sun_times(hass: HomeAssistant) -> dict[str, str | None]:
+    """Today's sunrise, sunset and solar noon as local ISO timestamps."""
     today = dt_util.now().date()
-    now_iso = dt_util.now().isoformat()
     sun: dict[str, str | None] = {}
     for event, astral in (
         ("sunrise", "sunrise"),
@@ -360,6 +354,18 @@ def _snapshot(
     ):
         when = get_astral_event_date(hass, astral, today)
         sun[event] = dt_util.as_local(when).isoformat() if when else None
+    return sun
+
+
+def _snapshot(
+    hass: HomeAssistant,
+    coordinator: AdvancedCoverCoordinator,
+    scheduler: AdvancedCoverScheduler,
+) -> dict[str, Any]:
+    """Full panel state for one entry."""
+    data = coordinator.data_model
+    now_iso = dt_util.now().isoformat()
+    sun = _sun_times(hass)
     return {
         "entry_id": coordinator.config_entry.entry_id,
         "config": data.config.to_dict(),
@@ -678,6 +684,53 @@ def ws_cover_probe(
     connection.send_result(msg["id"], result)
 
 
+async def async_drive_cover(
+    hass: HomeAssistant, cover: CoverItem, command: str, position: int | None = None
+) -> None:
+    """Drive a cover directly (panel test buttons, dashboard card controls).
+
+    Manual low mode: the controls drive the low-speed entity (or script)
+    instead of the normal cover entity. Stop always goes to the normal
+    entity — scripts cannot stop a running move.
+    """
+    service_map = {
+        "open": SERVICE_OPEN_COVER,
+        "close": SERVICE_CLOSE_COVER,
+        "stop": SERVICE_STOP_COVER,
+    }
+    entity_id = cover.cover_entity_id
+    if cover.manual_low_mode and cover.low_mode_entity_id:
+        entity_id = cover.low_mode_entity_id
+    elif cover.manual_low_mode and cover.low_mode_script_id and command != "stop":
+        target = {"open": 100, "close": 0}.get(
+            command, 50 if position is None else position
+        )
+        await hass.services.async_call(
+            SCRIPT_DOMAIN,
+            cover.low_mode_script_id.split(".", 1)[-1],
+            {"position": target},
+            blocking=True,
+        )
+        return
+    if command == "position":
+        await hass.services.async_call(
+            COVER_DOMAIN,
+            SERVICE_SET_COVER_POSITION,
+            {
+                ATTR_ENTITY_ID: entity_id,
+                ATTR_POSITION: 50 if position is None else position,
+            },
+            blocking=True,
+        )
+        return
+    await hass.services.async_call(
+        COVER_DOMAIN,
+        service_map[command],
+        {ATTR_ENTITY_ID: entity_id},
+        blocking=True,
+    )
+
+
 @websocket_api.websocket_command(
     {
         vol.Required("type"): f"{DOMAIN}/covers/test",
@@ -702,45 +755,7 @@ async def ws_cover_test(
     if cover is None:
         connection.send_error(msg["id"], ERR_NOT_FOUND, "Unknown cover item")
         return
-    service_map = {
-        "open": SERVICE_OPEN_COVER,
-        "close": SERVICE_CLOSE_COVER,
-        "stop": SERVICE_STOP_COVER,
-    }
-    command = msg["command"]
-    # Manual low mode: the panel controls drive the low-speed entity (or
-    # script) instead of the normal cover entity. Stop always goes to the
-    # normal entity — scripts cannot stop a running move.
-    entity_id = cover.cover_entity_id
-    if cover.manual_low_mode and cover.low_mode_entity_id:
-        entity_id = cover.low_mode_entity_id
-    elif cover.manual_low_mode and cover.low_mode_script_id and command != "stop":
-        position = {"open": 100, "close": 0}.get(command, msg.get("position", 50))
-        await hass.services.async_call(
-            SCRIPT_DOMAIN,
-            cover.low_mode_script_id.split(".", 1)[-1],
-            {"position": position},
-            blocking=True,
-        )
-        connection.send_result(msg["id"], {"success": True})
-        return
-    if command == "position":
-        await hass.services.async_call(
-            COVER_DOMAIN,
-            SERVICE_SET_COVER_POSITION,
-            {
-                ATTR_ENTITY_ID: entity_id,
-                ATTR_POSITION: msg.get("position", 50),
-            },
-            blocking=True,
-        )
-    else:
-        await hass.services.async_call(
-            COVER_DOMAIN,
-            service_map[command],
-            {ATTR_ENTITY_ID: entity_id},
-            blocking=True,
-        )
+    await async_drive_cover(hass, cover, msg["command"], msg.get("position"))
     connection.send_result(msg["id"], {"success": True})
 
 

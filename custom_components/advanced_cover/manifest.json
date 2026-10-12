@@ -2,7 +2,8 @@
   "domain": "advanced_cover",
   "name": "Advanced Cover",
   "after_dependencies": [
-    "frontend"
+    "frontend",
+    "lovelace"
   ],
   "codeowners": [
     "@florianbaethge"

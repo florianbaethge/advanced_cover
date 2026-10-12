@@ -5,6 +5,8 @@ export interface HomeAssistant {
   states: HassEntities;
   config?: HassConfig;
   areas?: Record<string, { area_id: string; name: string }>;
+  user?: { is_admin?: boolean };
+  themes?: { darkMode?: boolean };
   locale?: {
     language: string;
     time_format: string;

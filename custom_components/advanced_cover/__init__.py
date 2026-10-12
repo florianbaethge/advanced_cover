@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 from homeassistant.helpers import config_validation as cv
 
 from .const import (
+    CARD_API_REGISTERED_KEY,
+    CARD_REGISTERED_KEY,
     DOMAIN,
     HASS_CONFIG_KEY,
     PANEL_REGISTERED_KEY,
@@ -83,11 +85,39 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await scheduler.async_setup()
     coordinator.async_setup_state_tracking()
 
+    await _async_register_frontend(hass)
+
+    return True
+
+
+async def _async_register_frontend(hass: HomeAssistant) -> None:
+    """Register the WebSocket APIs, the Lovelace card and the sidebar panel.
+
+    Everything here is per Home Assistant instance, not per entry, hence the
+    ``hass.data`` flags.
+    """
     if not hass.data.get(WEBSOCKET_REGISTERED_KEY):
         from .websocket import async_register_websocket_api
 
         async_register_websocket_api(hass)
         hass.data[WEBSOCKET_REGISTERED_KEY] = True
+
+    if not hass.data.get(CARD_API_REGISTERED_KEY):
+        from .card_api import async_register_card_api
+
+        async_register_card_api(hass)
+
+    if not hass.data.get(CARD_REGISTERED_KEY):
+        # Claim before the first await: entries of this domain set up
+        # concurrently, and a second pass would re-register the static route.
+        hass.data[CARD_REGISTERED_KEY] = True
+        try:
+            from .card import async_register_card
+
+            await async_register_card(hass)
+        except Exception:
+            hass.data.pop(CARD_REGISTERED_KEY, None)
+            raise
 
     if not hass.data.get(PANEL_REGISTERED_KEY):
         # Claim the flag before the first await: entries of this domain are
@@ -109,8 +139,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except Exception:
             hass.data.pop(PANEL_REGISTERED_KEY, None)
             raise
-
-    return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
