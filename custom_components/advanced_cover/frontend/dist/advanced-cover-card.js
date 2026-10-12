@@ -3824,7 +3824,7 @@ if (!window.customCards.some((card) => card.type === "advanced-cover-card")) {
     });
 }
 // eslint-disable-next-line no-console
-console.info(`%c ADVANCED-COVER-CARD %c ${"0.8.0"} `, "color: #fff; background: #03a9f4; font-weight: 700;", "color: #03a9f4; background: #fff; font-weight: 700;");
+console.info(`%c ADVANCED-COVER-CARD %c ${"0.9.0"} `, "color: #fff; background: #03a9f4; font-weight: 700;", "color: #03a9f4; background: #fff; font-weight: 700;");
 
 export { AdvancedCoverCard };
 //# sourceMappingURL=advanced-cover-card.js.map
