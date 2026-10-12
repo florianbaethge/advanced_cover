@@ -581,6 +581,9 @@
     "card_master_info": "Automatik-Schalter anzeigen",
     "card_ed_runs": "Manuelle Läufe",
     "card_ed_runs_help": "Gilt für jeden Ausführen-Knopf der Karte.",
-    "card_ed_entry_gone": "{id} (existiert nicht mehr)"
+    "card_ed_entry_gone": "{id} (existiert nicht mehr)",
+    "card_cover_auto": "Automatik für {name}",
+    "card_ed_cover_auto": "Automatik je Rollo schaltbar",
+    "card_tomorrow": "Morgen {time} · {name}"
   }
 }

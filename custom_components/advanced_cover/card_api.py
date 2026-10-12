@@ -23,24 +23,20 @@ own locale instead of the server's.
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from typing import Any
 
 import voluptuous as vol
 from homeassistant.auth.permissions.const import POLICY_CONTROL
 from homeassistant.components import websocket_api
-from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, Unauthorized
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from .capabilities import get_cover_capabilities
-from .const import (
-    CARD_API_REGISTERED_KEY,
-    CARD_LOG_SIZE,
-    CARD_SUBSCRIBERS_KEY,
-    DOMAIN,
-)
+from .const import CARD_API_REGISTERED_KEY, CARD_LOG_SIZE, DOMAIN
 from .coordinator import AdvancedCoverCoordinator
 from .executor import current_cover_position
 from .models import CoverItem, EntryData, Scenario
@@ -53,6 +49,7 @@ from .websocket import (
     _safety_blocked_now,
     _sun_times,
     async_drive_cover,
+    async_track_subscription,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -64,7 +61,13 @@ WS_ACTION = f"{DOMAIN}/card/action"
 ACTION_RUN_SCENARIO = "run_scenario"
 ACTION_SET_ENABLED = "set_enabled"
 ACTION_COVER = "cover"
-CARD_ACTIONS = (ACTION_RUN_SCENARIO, ACTION_SET_ENABLED, ACTION_COVER)
+ACTION_SET_COVER_ENABLED = "set_cover_enabled"
+CARD_ACTIONS = (
+    ACTION_RUN_SCENARIO,
+    ACTION_SET_ENABLED,
+    ACTION_COVER,
+    ACTION_SET_COVER_ENABLED,
+)
 # No "position" here: the card offers open/stop/close, the slider lives in
 # the cover entity's own more-info dialog.
 COVER_COMMANDS = ("open", "close", "stop")
@@ -97,6 +100,15 @@ def _master_entity_id(hass: HomeAssistant, entry_id: str) -> str | None:
     """Entity id of the entry's master switch (more-info, permission check)."""
     return er.async_get(hass).async_get_entity_id(
         "switch", DOMAIN, f"{entry_id}_master"
+    )
+
+
+def _cover_switch_entity_id(
+    hass: HomeAssistant, entry_id: str, cover_item_id: str
+) -> str | None:
+    """Entity id of one cover's automation switch (permission check)."""
+    return er.async_get(hass).async_get_entity_id(
+        "switch", DOMAIN, f"{entry_id}_cover_{cover_item_id}_automation"
     )
 
 
@@ -169,7 +181,8 @@ def _snapshot(
     """Card state for one entry."""
     data = coordinator.data_model
     entry_id = coordinator.config_entry.entry_id
-    now_iso = dt_util.now().isoformat()
+    now = dt_util.now()
+    now_iso = now.isoformat()
     return {
         "entry_id": entry_id,
         "name": data.config.name,
@@ -183,6 +196,8 @@ def _snapshot(
             _enrich_occurrence(hass, data, occ.to_dict(), now_iso)
             for occ in coordinator.day_plan
         ],
+        # The plan ends at midnight; this is what the day after starts with.
+        "tomorrow": scheduler.first_occurrence_on(now.date() + timedelta(days=1)),
         "log": list(coordinator.action_log)[:CARD_LOG_SIZE],
     }
 
@@ -224,21 +239,12 @@ def ws_subscribe(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Push a fresh snapshot whenever the plan or a referenced entity changes.
-
-    When the entry is unloaded the subscriber gets one last ``{"unloaded":
-    true}`` event instead of silence, so the card can subscribe again once the
-    entry is back (a reload) rather than showing a frozen day forever.
-    """
+    """Push a fresh snapshot whenever the plan or a referenced entity changes."""
     runtime = _resolve(hass, msg.get("entry_id"))
     if runtime is None:
         _not_found(hass, connection, msg)
         return
     coordinator, scheduler = runtime
-    entry_id = coordinator.config_entry.entry_id
-    subscribers: set[CALLBACK_TYPE] = hass.data.setdefault(
-        CARD_SUBSCRIBERS_KEY, {}
-    ).setdefault(entry_id, set())
 
     @callback
     def _push() -> None:
@@ -248,34 +254,9 @@ def ws_subscribe(
             )
         )
 
-    stop_listening = coordinator.async_add_listener(_push)
-
-    @callback
-    def _release() -> None:
-        """Drop the listener and tell the card its entry went away."""
-        stop_listening()
-        connection.subscriptions.pop(msg["id"], None)
-        connection.send_message(
-            websocket_api.event_message(msg["id"], {"unloaded": True})
-        )
-
-    @callback
-    def _unsubscribe() -> None:
-        stop_listening()
-        subscribers.discard(_release)
-
-    subscribers.add(_release)
-    connection.subscriptions[msg["id"]] = _unsubscribe
+    async_track_subscription(hass, connection, msg, coordinator, _push)
     connection.send_result(msg["id"])
     _push()
-
-
-@callback
-def async_release_subscribers(hass: HomeAssistant, entry_id: str) -> None:
-    """Detach every card subscribed to an entry that is being unloaded."""
-    subscribers = hass.data.get(CARD_SUBSCRIBERS_KEY, {}).pop(entry_id, set())
-    for release in list(subscribers):
-        release()
 
 
 @websocket_api.websocket_command(
@@ -341,6 +322,26 @@ async def ws_action(
                 [_master_entity_id(hass, coordinator.config_entry.entry_id)],
             )
             coordinator.data_model.config.enabled = msg["enabled"]
+            await coordinator.async_save_and_notify()
+        elif action == ACTION_SET_COVER_ENABLED:
+            cover = coordinator.cover_by_id(msg.get("cover_item_id", ""))
+            if cover is None:
+                connection.send_error(
+                    msg["id"], websocket_api.ERR_NOT_FOUND, "Unknown cover item"
+                )
+                return
+            if "enabled" not in msg:
+                _invalid("enabled is required")
+                return
+            _require_control(
+                connection,
+                [
+                    _cover_switch_entity_id(
+                        hass, coordinator.config_entry.entry_id, cover.id
+                    )
+                ],
+            )
+            cover.enabled = msg["enabled"]
             await coordinator.async_save_and_notify()
         else:
             cover = coordinator.cover_by_id(msg.get("cover_item_id", ""))

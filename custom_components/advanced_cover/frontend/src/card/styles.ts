@@ -490,6 +490,20 @@ export const cardStyles = css`
     margin-top: 4px;
     text-wrap: pretty;
   }
+  .tomorrow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    font-size: 13px;
+    color: var(--ac-fg);
+    font-variant-numeric: tabular-nums;
+  }
+  .tomorrow ha-icon {
+    --mdc-icon-size: 17px;
+    color: var(--ac-fg2);
+    flex: none;
+  }
   .note {
     display: flex;
     align-items: flex-start;
@@ -855,6 +869,33 @@ export const cardStyles = css`
     50% {
       opacity: 0.45;
     }
+  }
+
+  /* Per-cover automation switch. */
+  .auto {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    flex: none;
+    border-radius: 10px;
+    border: 1px solid var(--ac-div);
+    background: none;
+    color: var(--ac-off);
+    --mdc-icon-size: 19px;
+  }
+  .auto.on {
+    color: var(--ac-pri);
+    background: var(--ac-tint);
+    border-color: color-mix(in srgb, var(--ac-pri) 40%, transparent);
+  }
+  .auto:hover:not(:disabled) {
+    filter: brightness(1.15);
+  }
+  :host([data-narrow]) .auto {
+    width: 32px;
   }
 
   .ctrl {

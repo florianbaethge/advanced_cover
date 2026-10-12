@@ -157,21 +157,69 @@ const navigate = (_node, path, replace = false) => {
     }
     fireEvent(window, "location-changed", { replace });
 };
-/** "HH:MM" for an ISO timestamp in the user's locale. */
+/* Time zone the times on screen are shown in. `undefined` is the browser's
+   own zone; set per render from the user's profile via `useTimeZone`. */
+let activeZone;
+let zoneParts;
+/**
+ * Follow the user's time zone setting, as Home Assistant's own UI does: the
+ * browser's zone by default, Home Assistant's when the profile says "server".
+ * That is the setting for a tablet or a traveller whose device runs on
+ * another clock than the house — without it the day strip would be laid out
+ * around the device's midnight instead of the plan's.
+ */
+function useTimeZone(hass) {
+    const wanted = hass?.locale?.time_zone === "server" ? hass.config?.time_zone : undefined;
+    if (wanted === activeZone)
+        return;
+    zoneParts = undefined;
+    activeZone = undefined;
+    if (!wanted)
+        return;
+    try {
+        // Throws a RangeError for a zone this browser does not know.
+        zoneParts = new Intl.DateTimeFormat("en-GB", {
+            timeZone: wanted,
+            hour: "2-digit",
+            minute: "2-digit",
+            hourCycle: "h23",
+        });
+        activeZone = wanted;
+    }
+    catch {
+        /* keep the browser's zone */
+    }
+}
+/** "HH:MM" for an ISO timestamp in the user's locale and time zone. */
 function formatTime(iso) {
     if (!iso)
         return "–";
     const d = new Date(iso);
     if (Number.isNaN(d.getTime()))
         return "–";
-    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZone: activeZone,
+    });
 }
-/** Minutes since local midnight for an ISO timestamp (for timeline placement). */
+/** Minutes since midnight for an ISO timestamp (for timeline placement), in
+    the same zone `formatTime` prints. */
 function minutesOfDay(iso) {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime()))
         return null;
-    return d.getHours() * 60 + d.getMinutes();
+    if (!zoneParts)
+        return d.getHours() * 60 + d.getMinutes();
+    let hour = 0;
+    let minute = 0;
+    for (const part of zoneParts.formatToParts(d)) {
+        if (part.type === "hour")
+            hour = Number(part.value);
+        else if (part.type === "minute")
+            minute = Number(part.value);
+    }
+    return hour * 60 + minute;
 }
 /** Days per month of a yearless date; February includes the leap day. */
 const DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
@@ -7311,6 +7359,7 @@ class AdvancedCoverPanel extends i$2 {
         super.disconnectedCallback();
         window.removeEventListener("location-changed", this._locChanged);
         document.removeEventListener("visibilitychange", this._onVisibility);
+        window.clearTimeout(this._resubscribeTimer);
         void this._teardownSubscription();
     }
     async _teardownSubscription() {
@@ -7344,6 +7393,14 @@ class AdvancedCoverPanel extends i$2 {
         this._subscribedEntryId = entryId;
         try {
             const unsubPromise = subscribeState(this.hass, entryId, (snapshot) => {
+                if ("unloaded" in snapshot) {
+                    // The entry was unloaded (a reload): this subscription is over.
+                    // Keep the last state on screen and come back for the new one.
+                    this._unsub = undefined;
+                    this._subscribedEntryId = undefined;
+                    this._resubscribeSoon(entryId);
+                    return;
+                }
                 this._snapshot = snapshot;
                 this._loading = false;
                 this._error = undefined;
@@ -7364,6 +7421,19 @@ class AdvancedCoverPanel extends i$2 {
             this._subscribedEntryId = undefined;
         }
         this.requestUpdate();
+    }
+    /** Subscribe again after the entry was unloaded; a reload takes a moment,
+        so a few tries, then the error of the last one stays on screen. */
+    _resubscribeSoon(entryId, attempt = 0) {
+        window.clearTimeout(this._resubscribeTimer);
+        this._resubscribeTimer = window.setTimeout(async () => {
+            if (getPath().entryId !== entryId || !this.isConnected)
+                return;
+            await this._ensureSubscription(entryId);
+            if (this._subscribedEntryId !== entryId && attempt < 5) {
+                this._resubscribeSoon(entryId, attempt + 1);
+            }
+        }, 2000 * (attempt + 1));
     }
     async _reloadPath() {
         const { entryId } = getPath();
@@ -7434,6 +7504,8 @@ class AdvancedCoverPanel extends i$2 {
         if (!this.hass || !this._initialPanelI18nDone) {
             return b `<div class="view"><div class="view-inner">Loading…</div></div>`;
         }
+        // Before the views render: they print and place times through helpers.
+        useTimeZone(this.hass);
         const path = getPath();
         const page = normalizePage(path.page);
         if (!path.entryId) {

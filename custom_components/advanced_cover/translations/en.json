@@ -581,6 +581,9 @@
     "card_master_info": "Show the automation switch",
     "card_ed_runs": "Manual runs",
     "card_ed_runs_help": "Applies to every run button on the card.",
-    "card_ed_entry_gone": "{id} (no longer exists)"
+    "card_ed_entry_gone": "{id} (no longer exists)",
+    "card_cover_auto": "Automation for {name}",
+    "card_ed_cover_auto": "Automation switch per cover",
+    "card_tomorrow": "Tomorrow {time} · {name}"
   }
 }

@@ -6,9 +6,15 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
+from homeassistant.auth.permissions.const import POLICY_CONTROL
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import (
+    ServiceValidationError,
+    Unauthorized,
+    UnknownUser,
+)
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import entity_registry as er
 
 from .const import (
     ATTR_CONFIG_ENTRY_ID,
@@ -86,6 +92,27 @@ def _find_entry_for_scenario(
     return None
 
 
+async def _async_require_control(
+    hass: HomeAssistant, call: ServiceCall, entity_ids: list[str | None]
+) -> None:
+    """Refuse a user who may not control the entities a call acts on.
+
+    These services move covers and flip switches without going through the
+    entities, so Home Assistant's own permission check never sees them. Calls
+    without a user (automations, scripts, the system) pass.
+    """
+    if call.context.user_id is None:
+        return
+    user = await hass.auth.async_get_user(call.context.user_id)
+    if user is None:
+        raise UnknownUser(context=call.context)
+    for entity_id in entity_ids:
+        if entity_id and not user.permissions.check_entity(entity_id, POLICY_CONTROL):
+            raise Unauthorized(
+                context=call.context, entity_id=entity_id, permission=POLICY_CONTROL
+            )
+
+
 async def async_setup_services(hass: HomeAssistant) -> None:
     """Register domain services."""
     if hass.services.has_service(DOMAIN, SERVICE_RUN_SCENARIO):
@@ -105,6 +132,19 @@ async def async_setup_services(hass: HomeAssistant) -> None:
     async def _run_scenario(call: ServiceCall) -> None:
         data = _resolve(call)
         scheduler: AdvancedCoverScheduler = data["scheduler"]
+        coordinator: AdvancedCoverCoordinator = data["coordinator"]
+        scenario = coordinator.data_model.scenario_by_id(call.data[ATTR_SCENARIO_ID])
+        only = call.data.get(ATTR_COVER_ITEM_ID)
+        await _async_require_control(
+            hass,
+            call,
+            [
+                cover.cover_entity_id
+                for a in (scenario.assignments if scenario else [])
+                if (only is None or a.cover_item_id == only)
+                and (cover := coordinator.cover_by_id(a.cover_item_id))
+            ],
+        )
         try:
             await scheduler.async_run_scenario(
                 call.data[ATTR_SCENARIO_ID],
@@ -127,6 +167,17 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             raise ServiceValidationError(
                 f"Unknown cover item: {call.data[ATTR_COVER_ITEM_ID]}"
             )
+        await _async_require_control(
+            hass,
+            call,
+            [
+                er.async_get(hass).async_get_entity_id(
+                    "switch",
+                    DOMAIN,
+                    f"{coordinator.config_entry.entry_id}_cover_{cover.id}_automation",
+                )
+            ],
+        )
         cover.enabled = call.data[ATTR_ENABLED]
         await coordinator.async_save_and_notify()
 

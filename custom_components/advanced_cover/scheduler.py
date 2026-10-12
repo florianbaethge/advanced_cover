@@ -318,6 +318,8 @@ class AdvancedCoverScheduler:
         self._started_unsub: CALLBACK_TYPE | None = None
         self._lock = asyncio.Lock()
         self._shutdown = False
+        # (day, result) of the last first_occurrence_on() call.
+        self._first_occurrence_cache: tuple[date, dict[str, Any] | None] | None = None
 
     # ------------------------------------------------------------- lifecycle
 
@@ -402,6 +404,9 @@ class AdvancedCoverScheduler:
 
     def _teardown_plan(self) -> None:
         """Release all per-occurrence listeners/timers."""
+        # A rebuild follows a config change or a new day; either way what
+        # another day starts with has to be worked out afresh.
+        self._first_occurrence_cache = None
         for occ in self._plan:
             if occ.unsub_expiry:
                 occ.unsub_expiry()
@@ -1122,6 +1127,64 @@ class AdvancedCoverScheduler:
                     "armed": False,
                 }
         return None
+
+    def first_occurrence_on(self, day: date) -> dict[str, Any] | None:
+        """Earliest scenario firing on another day (the card's "tomorrow").
+
+        Computed with the plan's own rules — weekdays, time of year, sun
+        times, the day's random offset — but without building a plan: no
+        outcomes, no timers. Cached until the next rebuild, since the sun
+        solver is not free and every snapshot asks.
+        """
+        cached = self._first_occurrence_cache
+        if cached is not None and cached[0] == day:
+            return cached[1]
+        data = self.coordinator.data_model
+        tz = dt_util.get_default_time_zone()
+        weekday = WEEKDAYS[day.weekday()]
+        best: tuple[datetime, Scenario] | None = None
+        for scenario in data.scenarios:
+            if (
+                not scenario.enabled
+                or weekday not in scenario.weekdays
+                or not scenario.active_on(day)
+                or not any(a.cover_item_id in data.covers for a in scenario.assignments)
+            ):
+                continue
+            planned: datetime | None = None
+            if (
+                scenario.trigger.type == TRIGGER_SUN_AZIMUTH
+                and scenario.trigger.az_relative
+            ):
+                rel = compute_relative_occurrence(
+                    scenario,
+                    day,
+                    {
+                        a.cover_item_id: cover.azimuth
+                        for a in scenario.assignments
+                        if (cover := data.covers.get(a.cover_item_id)) is not None
+                    },
+                    lambda target: self.azimuth_crossing_local(target, day),
+                )
+                planned = rel[1] if rel else None
+            else:
+                times = compute_occurrence_times(
+                    scenario, day, tz, self._sun_resolver, self._position_resolver
+                )
+                planned = times[1] if times else None
+            if planned is not None and (best is None or planned < best[0]):
+                best = (planned, scenario)
+        result = (
+            {
+                "when": best[0].isoformat(),
+                "scenario_id": best[1].id,
+                "scenario_name": best[1].name,
+            }
+            if best
+            else None
+        )
+        self._first_occurrence_cache = (day, result)
+        return result
 
     def next_action_global(self) -> dict[str, Any] | None:
         """Earliest pending action across all covers today."""

@@ -1,4 +1,4 @@
-import type { LogEntry, Occurrence } from "../types";
+import type { AssignmentRun, LogEntry, Occurrence } from "../types";
 import type { CardCover, CardScenario } from "./types";
 
 /* Pure read-model helpers for the card — no DOM, no lit, unit-tested. */
@@ -12,18 +12,43 @@ const time = (iso: string | null | undefined): number => {
 export const occKey = (occ: Occurrence): string =>
   `${occ.scenario_id}@${occ.planned_at}`;
 
-/** The next block that has not fired yet, or null when the day is done.
+/** What moves next: a block, when, and which of its covers. */
+export interface UpNext {
+  occ: Occurrence;
+  at: string;
+  runs: AssignmentRun[];
+}
 
-    A block without covers moves nothing, so it is not "next" (the backend's
-    next-run sensor skips it too). */
-export function nextUp(plan: Occurrence[], nowMs: number): Occurrence | null {
-  const upcoming = plan
-    .filter(
-      (occ) =>
-        !occ.fired && occ.assignments.length > 0 && time(occ.planned_at) >= nowMs
-    )
-    .sort((a, b) => time(a.planned_at) - time(b.planned_at));
-  return upcoming[0] ?? null;
+/** The next thing the plan will do, or null when the day is done.
+
+    Usually a block that has not fired yet, with all its covers. A
+    facade-relative block is different: it fires with its first facade and
+    keeps the other covers armed for their own, later turn — those turns are
+    still "next" although the block counts as fired. A block without covers
+    moves nothing and is never next (the backend's next-run sensor skips it
+    too). */
+export function nextUp(plan: Occurrence[], nowMs: number): UpNext | null {
+  const candidates: UpNext[] = [];
+  for (const occ of plan) {
+    if (!occ.assignments.length) continue;
+    if (!occ.fired) {
+      if (time(occ.planned_at) >= nowMs) {
+        candidates.push({ occ, at: occ.planned_at, runs: occ.assignments });
+      }
+      continue;
+    }
+    const pending = occ.assignments
+      .filter(
+        (run) =>
+          run.status === "armed" && run.fire_at && time(run.fire_at) > nowMs
+      )
+      .sort((a, b) => time(a.fire_at) - time(b.fire_at));
+    if (pending.length) {
+      candidates.push({ occ, at: pending[0].fire_at!, runs: pending });
+    }
+  }
+  candidates.sort((a, b) => time(a.at) - time(b.at));
+  return candidates[0] ?? null;
 }
 
 /** The block that fired most recently, or null before the first one. */
@@ -66,9 +91,14 @@ export function positionsLabel(positions: number[]): string {
   return low === high ? `${low} %` : `${low}–${high} %`;
 }
 
+/** Distinct targets of a set of runs (a block's covers, or some of them). */
+export function runPositions(runs: AssignmentRun[]): number[] {
+  return [...new Set(runs.map((run) => run.target_position))];
+}
+
 /** Distinct targets of one plan block's covers. */
 export function occPositions(occ: Occurrence): number[] {
-  return [...new Set(occ.assignments.map((run) => run.target_position))];
+  return runPositions(occ.assignments);
 }
 
 /** Today's block of a scenario — the upcoming one first, else the last fired. */

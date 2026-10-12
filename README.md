@@ -106,7 +106,7 @@ Copy `custom_components/advanced_cover` into your `config/custom_components/` fo
 
 ## Services
 
-All services accept an optional `config_entry_id` (needed only with multiple entries).
+All services accept an optional `config_entry_id` (needed only with multiple entries). Called by a user (rather than an automation), `run_scenario`, `run_scenario_for_cover` and `set_cover_enabled` ask for that user's control permission on the covers involved, as the entities themselves would.
 
 | Service | Purpose |
 |---|---|

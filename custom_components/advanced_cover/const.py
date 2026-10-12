@@ -37,8 +37,8 @@ CARD_FILENAME: Final = "dist/advanced-cover-card.js"
 CARD_URL: Final = "/advanced_cover/advanced-cover-card.js"
 CARD_REGISTERED_KEY: Final = "_advanced_cover_card_registered"
 CARD_API_REGISTERED_KEY: Final = "_advanced_cover_card_api_registered"
-# entry_id -> callbacks that detach the cards subscribed to that entry.
-CARD_SUBSCRIBERS_KEY: Final = "_advanced_cover_card_subscribers"
+# entry_id -> callbacks that detach the panels and cards subscribed to it.
+SUBSCRIBERS_KEY: Final = "_advanced_cover_subscribers"
 # Newest action-log entries the card snapshot carries (run feedback only).
 CARD_LOG_SIZE: Final = 30
 

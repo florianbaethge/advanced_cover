@@ -36,16 +36,40 @@ const PLAN = [
 ];
 
 test("nextUp is the earliest block that has not fired yet", () => {
-  assert.equal(nextUp(PLAN, ms("14:00")).scenario_id, "sunset");
-  assert.equal(nextUp(PLAN, ms("19:00")).scenario_id, "night");
+  const up = nextUp(PLAN, ms("14:00"));
+  assert.equal(up.occ.scenario_id, "sunset");
+  assert.equal(up.at, at("18:25"));
+  assert.equal(up.runs.length, 2);
+  assert.equal(nextUp(PLAN, ms("19:00")).occ.scenario_id, "night");
   assert.equal(nextUp(PLAN, ms("23:00")), null);
   assert.equal(nextUp([], ms("12:00")), null);
+});
+
+test("a fired facade-relative block is still next for the covers yet to come", () => {
+  const plan = [
+    occ("facade", "09:00", true, [
+      { status: "done", target_position: 0 },
+      { status: "armed", target_position: 30, fire_at: at("16:40") },
+      { status: "armed", target_position: 30, fire_at: at("15:10") },
+    ]),
+    occ("sunset", "18:25", false, [{ status: "idle", target_position: 0 }]),
+  ];
+  const up = nextUp(plan, ms("12:00"));
+  // The west covers' own turn, not the block's 09:00 and not sunset.
+  assert.equal(up.occ.scenario_id, "facade");
+  assert.equal(up.at, at("15:10"));
+  assert.equal(up.runs.length, 2);
+  // One turn later only the last cover is left …
+  assert.equal(nextUp(plan, ms("16:00")).at, at("16:40"));
+  assert.equal(nextUp(plan, ms("16:00")).runs.length, 1);
+  // … and after it the day moves on.
+  assert.equal(nextUp(plan, ms("17:00")).occ.scenario_id, "sunset");
 });
 
 test("a block whose time passed without firing is not coming up any more", () => {
   const run = [{ status: "idle", target_position: 0 }];
   const stale = [occ("late", "09:00", false, run), occ("later", "20:00", false, run)];
-  assert.equal(nextUp(stale, ms("12:00")).scenario_id, "later");
+  assert.equal(nextUp(stale, ms("12:00")).occ.scenario_id, "later");
 });
 
 test("a block without covers moves nothing and is not next", () => {
@@ -53,7 +77,7 @@ test("a block without covers moves nothing and is not next", () => {
     occ("empty", "15:00", false),
     occ("real", "16:00", false, [{ status: "idle", target_position: 0 }]),
   ];
-  assert.equal(nextUp(plan, ms("14:00")).scenario_id, "real");
+  assert.equal(nextUp(plan, ms("14:00")).occ.scenario_id, "real");
   assert.equal(nextUp([plan[0]], ms("14:00")), null);
 });
 

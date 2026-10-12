@@ -13,6 +13,7 @@ import {
   formatTime,
   minutesOfDay,
   navigate,
+  useTimeZone,
 } from "../helpers";
 import { t } from "../i18n";
 import { exportPath } from "../navigation";
@@ -32,7 +33,13 @@ import type {
   Occurrence,
   Trigger,
 } from "../types";
-import { driveCover, runScenario, setEnabled, subscribeSnapshot } from "./api";
+import {
+  driveCover,
+  runScenario,
+  setCoverEnabled,
+  setEnabled,
+  subscribeSnapshot,
+} from "./api";
 import { localizedHass } from "./i18n";
 import {
   groupByArea,
@@ -43,9 +50,11 @@ import {
   occPositions,
   pick,
   positionsLabel,
+  runPositions,
   runResultCounts,
   scenarioOccurrence,
   waitingRuns,
+  type UpNext,
 } from "./model";
 import { cardStyles } from "./styles";
 import {
@@ -529,6 +538,17 @@ export class AdvancedCoverCard extends LitElement {
     );
   }
 
+  private _toggleCoverAutomation(cover: CardCover): void {
+    void this._act(`auto:${cover.id}`, () =>
+      setCoverEnabled(
+        this.hass!,
+        cover.id,
+        !cover.enabled,
+        this._config?.entry_id
+      )
+    );
+  }
+
   private _drive(cover: CardCover, command: "open" | "close" | "stop"): void {
     void this._act(`cover:${cover.id}:${command}`, () =>
       driveCover(this.hass!, cover.id, command, this._config?.entry_id)
@@ -553,6 +573,7 @@ export class AdvancedCoverCard extends LitElement {
 
   protected render(): TemplateResult | typeof nothing {
     if (!this.hass || !this._config) return nothing;
+    useTimeZone(this.hass);
     const snap = this._snapshot;
     if (this._error || !snap) {
       return html`<ha-card>
@@ -764,7 +785,8 @@ export class AdvancedCoverCard extends LitElement {
     const cfg = this._cfg;
     const showRun = cfg.next_actions.includes("run");
     const showToggle = cfg.next_actions.includes("toggle");
-    const next = snap.enabled ? nextUp(snap.plan, Date.now()) : null;
+    const up = snap.enabled ? nextUp(snap.plan, Date.now()) : null;
+    const next = up?.occ ?? null;
 
     let main: TemplateResult;
     if (!snap.enabled) {
@@ -773,8 +795,8 @@ export class AdvancedCoverCard extends LitElement {
         <div class="big">${this._t("card_off_title")}</div>
         <div class="hint">${this._t("card_off_hint")}</div>
       `;
-    } else if (next) {
-      main = this._renderNextSummary(snap, next);
+    } else if (up) {
+      main = this._renderNextSummary(snap, up);
     } else {
       const done = snap.plan.filter((occ) => occ.fired).length;
       main = html`
@@ -790,6 +812,15 @@ export class AdvancedCoverCard extends LitElement {
               })
             : this._t("card_no_plan_hint")}
         </div>
+        ${snap.tomorrow
+          ? html`<div class="tomorrow">
+              <ha-icon icon="mdi:calendar-arrow-right"></ha-icon>
+              ${this._t("card_tomorrow", {
+                time: formatTime(snap.tomorrow.when),
+                name: snap.tomorrow.scenario_name,
+              })}
+            </div>`
+          : nothing}
       `;
     }
 
@@ -859,20 +890,22 @@ export class AdvancedCoverCard extends LitElement {
     `;
   }
 
-  private _renderNextSummary(
-    snap: CardSnapshot,
-    occ: Occurrence
-  ): TemplateResult {
+  private _renderNextSummary(snap: CardSnapshot, up: UpNext): TemplateResult {
+    const occ = up.occ;
     const scenario = snap.scenarios.find((s) => s.id === occ.scenario_id);
     const trigger = triggerMeta(scenario?.trigger);
     const verdict = occVerdict(occ);
-    const showCheck = verdict !== "would_run" || Boolean(scenario?.has_conditions);
+    // A block that already fired (a facade-relative one with covers still to
+    // come) has no live check any more — its conditions were decided then.
+    const showCheck =
+      !occ.fired &&
+      (verdict !== "would_run" || Boolean(scenario?.has_conditions));
     const reason = verdict === "would_run" ? null : occPreflightReason(this._l, occ);
     return html`
       <div class="label">${this._t("card_next_up")}</div>
       <div class="clock-row">
-        <span class="clock">${formatTime(occ.planned_at)}</span>
-        <span class="lead">${this._lead(occ.planned_at)}</span>
+        <span class="clock">${formatTime(up.at)}</span>
+        <span class="lead">${this._lead(up.at)}</span>
       </div>
       <div class="next-name">${occ.scenario_name}</div>
       <div class="facts">
@@ -882,7 +915,7 @@ export class AdvancedCoverCard extends LitElement {
         </span>
         <span>
           <ha-icon icon="mdi:window-shutter"></ha-icon>
-          ${this._coversTarget(occ.assignments.length, occPositions(occ))}
+          ${this._coversTarget(up.runs.length, runPositions(up.runs))}
         </span>
       </div>
       ${showCheck
@@ -942,7 +975,7 @@ export class AdvancedCoverCard extends LitElement {
         events,
         sunriseMin: snap.sun.sunrise ? minutesOfDay(snap.sun.sunrise) : null,
         sunsetMin: snap.sun.sunset ? minutesOfDay(snap.sun.sunset) : null,
-        nowMin: now.getHours() * 60 + now.getMinutes(),
+        nowMin: minutesOfDay(now.toISOString()) ?? 0,
         showTimeLabels: false,
         axisEveryH: this._narrow ? 6 : 3,
       })}
@@ -1236,6 +1269,22 @@ export class AdvancedCoverCard extends LitElement {
           ${this._renderCoverSub(cover, live.available)}
         </span>
       </button>
+      ${this._cfg.cover_automation
+        ? html`<button
+            type="button"
+            class="auto ${cover.enabled ? "on" : ""}"
+            role="switch"
+            aria-checked=${cover.enabled ? "true" : "false"}
+            title=${this._t("card_cover_auto", { name: cover.name })}
+            aria-label=${this._t("card_cover_auto", { name: cover.name })}
+            .disabled=${this._isBusy(`auto:${cover.id}`)}
+            @click=${() => this._toggleCoverAutomation(cover)}
+          >
+            <ha-icon
+              icon=${cover.enabled ? "mdi:robot-outline" : "mdi:robot-off-outline"}
+            ></ha-icon>
+          </button>`
+        : nothing}
       ${this._cfg.cover_controls
         ? html`<span class="ctrl">
             ${button("open", icons.open, live.position === 100 && !live.moving)}
@@ -1371,16 +1420,20 @@ export class AdvancedCoverCard extends LitElement {
   // ---- compact tile -------------------------------------------------------
 
   private _renderCompact(snap: CardSnapshot): TemplateResult {
-    const next = snap.enabled ? nextUp(snap.plan, Date.now()) : null;
+    const up = snap.enabled ? nextUp(snap.plan, Date.now()) : null;
+    const next = up?.occ ?? null;
     const waiting =
       snap.enabled && waitingRuns(snap.plan, Date.now()).length > 0;
     let sub: string;
     if (!snap.enabled) {
       sub = this._t("card_off_title");
-    } else if (next) {
-      sub = `${formatTime(next.planned_at)} · ${next.scenario_name} · ${this._lead(
-        next.planned_at
-      )}`;
+    } else if (up) {
+      sub = `${formatTime(up.at)} · ${up.occ.scenario_name} · ${this._lead(up.at)}`;
+    } else if (snap.tomorrow) {
+      sub = this._t("card_tomorrow", {
+        time: formatTime(snap.tomorrow.when),
+        name: snap.tomorrow.scenario_name,
+      });
     } else {
       sub = this._t(snap.plan.length ? "card_nothing_more" : "card_no_plan");
     }

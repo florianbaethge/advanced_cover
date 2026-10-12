@@ -104,21 +104,69 @@ const navigate = (_node, path, replace = false) => {
     }
     fireEvent(window, "location-changed", { replace });
 };
-/** "HH:MM" for an ISO timestamp in the user's locale. */
+/* Time zone the times on screen are shown in. `undefined` is the browser's
+   own zone; set per render from the user's profile via `useTimeZone`. */
+let activeZone;
+let zoneParts;
+/**
+ * Follow the user's time zone setting, as Home Assistant's own UI does: the
+ * browser's zone by default, Home Assistant's when the profile says "server".
+ * That is the setting for a tablet or a traveller whose device runs on
+ * another clock than the house — without it the day strip would be laid out
+ * around the device's midnight instead of the plan's.
+ */
+function useTimeZone(hass) {
+    const wanted = hass?.locale?.time_zone === "server" ? hass.config?.time_zone : undefined;
+    if (wanted === activeZone)
+        return;
+    zoneParts = undefined;
+    activeZone = undefined;
+    if (!wanted)
+        return;
+    try {
+        // Throws a RangeError for a zone this browser does not know.
+        zoneParts = new Intl.DateTimeFormat("en-GB", {
+            timeZone: wanted,
+            hour: "2-digit",
+            minute: "2-digit",
+            hourCycle: "h23",
+        });
+        activeZone = wanted;
+    }
+    catch {
+        /* keep the browser's zone */
+    }
+}
+/** "HH:MM" for an ISO timestamp in the user's locale and time zone. */
 function formatTime(iso) {
     if (!iso)
         return "–";
     const d = new Date(iso);
     if (Number.isNaN(d.getTime()))
         return "–";
-    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZone: activeZone,
+    });
 }
-/** Minutes since local midnight for an ISO timestamp (for timeline placement). */
+/** Minutes since midnight for an ISO timestamp (for timeline placement), in
+    the same zone `formatTime` prints. */
 function minutesOfDay(iso) {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime()))
         return null;
-    return d.getHours() * 60 + d.getMinutes();
+    if (!zoneParts)
+        return d.getHours() * 60 + d.getMinutes();
+    let hour = 0;
+    let minute = 0;
+    for (const part of zoneParts.formatToParts(d)) {
+        if (part.type === "hour")
+            hour = Number(part.value);
+        else if (part.type === "minute")
+            minute = Number(part.value);
+    }
+    return hour * 60 + minute;
 }
 
 const BASE = "advanced-cover";
@@ -626,13 +674,18 @@ const runScenario = (hass, scenarioId, ignoreConditions, entryId) => action(hass
     ignore_conditions: ignoreConditions,
 });
 const setEnabled = (hass, enabled, entryId) => action(hass, entryId, { action: "set_enabled", enabled });
+const setCoverEnabled = (hass, coverItemId, enabled, entryId) => action(hass, entryId, {
+    action: "set_cover_enabled",
+    cover_item_id: coverItemId,
+    enabled,
+});
 const driveCover = (hass, coverItemId, command, entryId) => action(hass, entryId, {
     action: "cover",
     cover_item_id: coverItemId,
     command,
 });
 
-var translations = {"de":{"errors_request_failed":"Anfrage fehlgeschlagen","status_planned":"Geplant","status_executed":"Ausgeführt","status_skipped":"Übersprungen","status_armed":"Wartet","status_expired":"Abgelaufen","status_blocked_safety":"Blockiert","status_unavailable":"Nicht verfügbar","status_done":"Erledigt","status_idle":"Geplant","covers_no_area":"Ohne Raum","contact_closed":"Geschlossen","contact_tilted":"Gekippt","contact_open":"Offen","contact_unknown":"Unbekannt","cond_op_above":"über","cond_op_below":"unter","cond_op_between":"zwischen","preflight_would_run":"Würde jetzt greifen","preflight_would_skip":"Würde jetzt übersprungen","preflight_unknown":"Nicht auswertbar","preflight_reason":"Blockiert durch: {reason}","preflight_partial":"{n} von {total} Rollos würden greifen","preflight_evaluated_at":"Live-Prüfung um {time}","preflight_and_more":"und {n} weitere","preflight_show_all":"Alle {n} Bedingungen anzeigen","preflight_only_if":"Nur wenn","preflight_would_block":"würde blockieren","cond_sum_entity_state":"{entity} ist {actual} (braucht {expected})","cond_sum_entity_state_not":"{entity} darf nicht {expected} sein","cond_sum_cover_position":"Position {actual}% (braucht {op} {value}%)","cond_sum_contact":"Kontakt ist {actual} (braucht {expected})","cond_sum_numeric":"{entity} = {actual} (braucht {op} {value})","cond_sum_sun_position":"Sonnenstand {actual} (Höhe {elev_req}, Richtung {az_req})","cond_sum_safety":"Fenster offen — Sicherheitsregel blockiert Schließen unter {ventilation}%","cond_sum_safety_clamp":"Fenster offen — schließt nur bis zur Lüftungsposition {ventilation}%","cond_sum_safety_ignore":"Fenster offen — Übersteuerung schließt trotzdem komplett","cond_sum_unavailable":"{entity} ist nicht verfügbar","cond_sum_position_unknown":"Aktuelle Position des Rollos ist unbekannt","cond_sum_no_contact":"Kein Fensterkontakt für dieses Rollo hinterlegt","cond_sum_no_facade":"Keine Fassadenrichtung für dieses Rollo hinterlegt","cond_sum_automation_disabled":"Automatik ist deaktiviert","cond_sum_invalid":"Ungültige Bedingung","today_legend_executed":"ausgeführt","today_legend_will_run":"läuft noch","today_legend_would_skip":"würde überspringen","today_legend_skipped":"übersprungen","today_legend_partial":"teilweise OK","today_legend_retry":"Wiederholungsfenster","reason_entity_unavailable":"Entität {entity} war nicht verfügbar — zur Sicherheit wurde nichts bewegt","reason_trigger_passed":"Auslösezeit war bereits vorbei (z. B. Neustart oder Neuberechnung nach der geplanten Zeit)","reason_waiting_facade":"Wartet, bis die Sonne diese Fassade erreicht","reason_no_facade":"Keine Ausrichtung für dieses Cover hinterlegt","reason_sun_not_reaching":"Die Sonne erreicht diese Fassade heute nicht","reason_already_at":"Bereits auf {pos}% — Bewegungen unter {delta}% werden zum Schutz des Motors übersprungen","reason_safety_clamped":"Fenster offen — auf Lüftungsposition {ventilation}% gestoppt; schließt vollständig, wenn das Fenster im Nachlauf-Fenster geschlossen wird","reason_service_failed":"Home-Assistant-Serviceaufruf fehlgeschlagen: {error}","reason_master_off":"Der Automatik-Hauptschalter war ausgeschaltet","reason_cover_off":"Die Automatik ist für dieses Cover deaktiviert","reason_removed":"Das Cover oder Szenario wurde aus der Konfiguration entfernt","card_state_active":"Aktiv","card_state_off":"Aus","card_state_waiting":"Wartet","card_next_up":"Als Nächstes","card_in_h_min":"in {h} h {m} min","card_in_h":"in {h} h","card_in_min":"in {m} min","card_now":"jetzt","card_covers_target":"{n} Rollos → {pos}","card_covers_target_one":"1 Rollo → {pos}","card_nothing_more":"Heute nichts mehr geplant","card_nothing_more_hint":"{done} von {total} Läufen sind durch.","card_no_plan":"Heute nichts geplant","card_no_plan_hint":"Für heute ist kein Szenario eingeplant.","card_off_title":"Automatik ist aus","card_off_hint":"Nichts läuft von selbst. Manuelles Ausführen geht weiter.","card_action_run":"Jetzt ausführen","card_action_run_confirm":"Jetzt ausführen?","card_action_run_force":"Jetzt erzwingen?","card_action_disable":"Automatik pausieren","card_action_enable":"Einschalten","card_last_run":"Zuletzt","card_waiting":"{name} wartet bis {time} auf seine Bedingungen","card_trigger_fixed_time":"Feste Uhrzeit","card_trigger_sunrise":"Sonnenaufgang","card_trigger_sunset":"Sonnenuntergang","card_trigger_solar_noon":"Sonnenhöchststand","card_trigger_sun_azimuth":"Sonnenrichtung","card_trigger_sun_elevation":"Sonnenhöhe","card_timeline_empty":"Heute löst kein Szenario aus.","card_retry_until":"Nachlauf bis {time}","card_covers_empty":"Noch keine Rollos angelegt.","card_cover_next":"{time} → {pos} %","card_cover_waiting":"wartet bis {time}","card_cover_idle":"nichts geplant","card_cover_auto_off":"Automatik aus","card_cover_unavailable":"Nicht verfügbar","card_cover_window_open":"Fenster offen","card_cover_window_tilted":"Fenster gekippt","card_cover_open":"{name} öffnen","card_cover_stop":"{name} stoppen","card_cover_close":"{name} schließen","card_scenarios_empty":"Noch keine Szenarien angelegt.","card_scn_today":"Heute {time}","card_scn_not_today":"Heute nicht geplant","card_scn_disabled":"Deaktiviert","card_scn_no_covers":"Keine Rollos zugewiesen","card_scn_run":"{name} ausführen","card_scn_confirm":"Ausführen?","card_scn_confirm_force":"Erzwingen?","card_cancel":"Abbrechen","card_run_nothing":"Nichts zu tun","card_open_panel":"Advanced Cover öffnen","card_pick_entry":"Mehrere Advanced-Cover-Einträge — wähle einen in den Karteneinstellungen.","card_no_entry":"Advanced Cover ist nicht eingerichtet.","card_loading":"Lädt…","card_ed_title":"Advanced-Cover-Karte","card_ed_entry":"Eintrag","card_ed_entry_auto":"Automatisch","card_ed_card_title":"Titel","card_ed_header":"Kopfzeile anzeigen","card_ed_compact":"Kompaktes Layout","card_ed_compact_help":"Eine Kachelzeile mit dem nächsten Lauf statt der Bereiche.","card_ed_sections":"Bereiche","card_ed_sections_help":"Wähle, was die Karte zeigt und in welcher Reihenfolge.","card_ed_sec_next":"Als Nächstes","card_ed_sec_next_help":"Das nächste Szenario mit Countdown und Live-Check.","card_ed_sec_timeline":"Tagesverlauf","card_ed_sec_timeline_help":"Die heutigen Läufe auf dem Tag-Nacht-Band.","card_ed_sec_covers":"Rollos","card_ed_sec_covers_help":"Position, Fensterkontakt und Steuerung je Rollo.","card_ed_sec_scenarios":"Szenarien","card_ed_sec_scenarios_help":"Einzelne Szenarien von Hand ausführen.","card_ed_move_up":"Nach oben","card_ed_move_down":"Nach unten","card_ed_next_run":"Knopf „Jetzt ausführen“","card_ed_next_toggle":"Knopf Automatik an/aus","card_ed_last_run":"Letzten Lauf anzeigen","card_ed_tl_list":"Heutige Läufe auflisten","card_ed_tl_legend":"Legende anzeigen","card_ed_covers_which":"Angezeigte Rollos","card_ed_scn_which":"Angezeigte Szenarien","card_ed_all":"Alle","card_ed_pick":"Auswahl","card_ed_group_area":"Nach Raum gruppieren","card_ed_controls":"Knöpfe Auf, Stopp und Zu","card_ed_confirm":"Vor dem Ausführen nachfragen","card_ed_ignore":"Bedingungen ignorieren","card_ed_ignore_help":"Manuelle Läufe übergehen die Bedingungen des Szenarios. Die Sicherheitsregel am Fenster gilt weiter.","card_master_info":"Automatik-Schalter anzeigen","card_ed_runs":"Manuelle Läufe","card_ed_runs_help":"Gilt für jeden Ausführen-Knopf der Karte.","card_ed_entry_gone":"{id} (existiert nicht mehr)"},"en":{"errors_request_failed":"Request failed","status_planned":"Planned","status_executed":"Executed","status_skipped":"Skipped","status_armed":"Waiting","status_expired":"Expired","status_blocked_safety":"Blocked","status_unavailable":"Unavailable","status_done":"Done","status_idle":"Planned","covers_no_area":"No area","contact_closed":"Closed","contact_tilted":"Tilted","contact_open":"Open","contact_unknown":"Unknown","cond_op_above":"above","cond_op_below":"below","cond_op_between":"between","preflight_would_run":"Would run now","preflight_would_skip":"Would be skipped now","preflight_unknown":"Cannot be evaluated","preflight_reason":"Blocked by: {reason}","preflight_partial":"{n} of {total} covers would run","preflight_evaluated_at":"Live check at {time}","preflight_and_more":"and {n} more","preflight_show_all":"Show all {n} conditions","preflight_only_if":"Only if","preflight_would_block":"would block","cond_sum_entity_state":"{entity} is {actual} (needs {expected})","cond_sum_entity_state_not":"{entity} must not be {expected}","cond_sum_cover_position":"Position {actual}% (needs {op} {value}%)","cond_sum_contact":"Contact is {actual} (needs {expected})","cond_sum_numeric":"{entity} = {actual} (needs {op} {value})","cond_sum_sun_position":"Sun at {actual} (height {elev_req}, direction {az_req})","cond_sum_safety":"Window open — safety rule blocks closing below {ventilation}%","cond_sum_safety_clamp":"Window open — will only close down to the {ventilation}% ventilation position","cond_sum_safety_ignore":"Window open — override closes fully anyway","cond_sum_unavailable":"{entity} is unavailable","cond_sum_position_unknown":"Current cover position is unknown","cond_sum_no_contact":"No window contact configured for this cover","cond_sum_no_facade":"No facade direction configured for this cover","cond_sum_automation_disabled":"Automation is disabled","cond_sum_invalid":"Invalid condition","today_legend_executed":"executed","today_legend_will_run":"will run","today_legend_would_skip":"would skip","today_legend_skipped":"skipped","today_legend_partial":"partly OK","today_legend_retry":"retry window","reason_entity_unavailable":"Entity {entity} was unavailable — nothing was moved for safety","reason_trigger_passed":"Trigger time had already passed (e.g. restart or recalculation after the planned time)","reason_waiting_facade":"Waiting until the sun reaches this facade","reason_no_facade":"No facade direction set for this cover","reason_sun_not_reaching":"The sun does not reach this facade today","reason_already_at":"Already at {pos}% — moves smaller than {delta}% are skipped to protect the motor","reason_safety_clamped":"Window open — stopped at the ventilation position {ventilation}%; closes fully if the window is shut within the re-arm window","reason_service_failed":"Home Assistant service call failed: {error}","reason_master_off":"The automation master switch was off","reason_cover_off":"Automation is switched off for this cover","reason_removed":"The cover or scenario was removed from the configuration","card_state_active":"Active","card_state_off":"Off","card_state_waiting":"Waiting","card_next_up":"Next up","card_in_h_min":"in {h} h {m} min","card_in_h":"in {h} h","card_in_min":"in {m} min","card_now":"now","card_covers_target":"{n} covers → {pos}","card_covers_target_one":"1 cover → {pos}","card_nothing_more":"Nothing else planned today","card_nothing_more_hint":"{done} of {total} runs are through.","card_no_plan":"Nothing planned today","card_no_plan_hint":"No scenario is scheduled for today.","card_off_title":"Automation is off","card_off_hint":"Nothing runs on its own. Manual runs still work.","card_action_run":"Run now","card_action_run_confirm":"Run now?","card_action_run_force":"Force now?","card_action_disable":"Pause automation","card_action_enable":"Switch on","card_last_run":"Last","card_waiting":"{name} waits for its conditions until {time}","card_trigger_fixed_time":"Fixed time","card_trigger_sunrise":"Sunrise","card_trigger_sunset":"Sunset","card_trigger_solar_noon":"Solar noon","card_trigger_sun_azimuth":"Sun direction","card_trigger_sun_elevation":"Sun elevation","card_timeline_empty":"No scenario fires today.","card_retry_until":"retries until {time}","card_covers_empty":"No covers set up yet.","card_cover_next":"{time} → {pos} %","card_cover_waiting":"waits until {time}","card_cover_idle":"nothing planned","card_cover_auto_off":"automation off","card_cover_unavailable":"Unavailable","card_cover_window_open":"Window open","card_cover_window_tilted":"Window tilted","card_cover_open":"Open {name}","card_cover_stop":"Stop {name}","card_cover_close":"Close {name}","card_scenarios_empty":"No scenarios set up yet.","card_scn_today":"Today {time}","card_scn_not_today":"Not scheduled today","card_scn_disabled":"Disabled","card_scn_no_covers":"No covers assigned","card_scn_run":"Run {name}","card_scn_confirm":"Run?","card_scn_confirm_force":"Force?","card_cancel":"Cancel","card_run_nothing":"Nothing to do","card_open_panel":"Open Advanced Cover","card_pick_entry":"Several Advanced Cover entries — pick one in the card settings.","card_no_entry":"Advanced Cover is not set up.","card_loading":"Loading…","card_ed_title":"Advanced Cover card","card_ed_entry":"Entry","card_ed_entry_auto":"Automatic","card_ed_card_title":"Title","card_ed_header":"Show header","card_ed_compact":"Compact layout","card_ed_compact_help":"One tile-style row with the next run instead of the sections.","card_ed_sections":"Sections","card_ed_sections_help":"Pick what the card shows and in which order.","card_ed_sec_next":"Next up","card_ed_sec_next_help":"The next scenario with countdown and live check.","card_ed_sec_timeline":"Day timeline","card_ed_sec_timeline_help":"Today's runs on the day and night strip.","card_ed_sec_covers":"Covers","card_ed_sec_covers_help":"Position, window contact and controls per cover.","card_ed_sec_scenarios":"Scenarios","card_ed_sec_scenarios_help":"Run single scenarios by hand.","card_ed_move_up":"Move up","card_ed_move_down":"Move down","card_ed_next_run":"“Run now” button","card_ed_next_toggle":"Automation on/off button","card_ed_last_run":"Show the last run","card_ed_tl_list":"List today's runs","card_ed_tl_legend":"Show the legend","card_ed_covers_which":"Covers to list","card_ed_scn_which":"Scenarios to list","card_ed_all":"All","card_ed_pick":"Pick","card_ed_group_area":"Group by area","card_ed_controls":"Open, stop and close buttons","card_ed_confirm":"Ask before running","card_ed_ignore":"Ignore conditions","card_ed_ignore_help":"Manual runs skip the scenario's conditions. The window safety rule still applies.","card_master_info":"Show the automation switch","card_ed_runs":"Manual runs","card_ed_runs_help":"Applies to every run button on the card.","card_ed_entry_gone":"{id} (no longer exists)"},"nl":{"errors_request_failed":"Aanvraag mislukt","status_planned":"Gepland","status_executed":"Uitgevoerd","status_skipped":"Overgeslagen","status_armed":"Wachten","status_expired":"Verlopen","status_blocked_safety":"Geblokkeerd","status_unavailable":"Niet beschikbaar","status_done":"Klaar","status_idle":"Gepland","covers_no_area":"Geen ruimte","contact_closed":"Gesloten","contact_tilted":"Gekanteld","contact_open":"Open","contact_unknown":"Onbekend","cond_op_above":"boven","cond_op_below":"onder","cond_op_between":"tussen","preflight_would_run":"Zou nu uitvoeren","preflight_would_skip":"Zou nu worden overgeslagen","preflight_unknown":"Kan niet worden geëvalueerd","preflight_reason":"Geblokkeerd door: {reason}","preflight_partial":"{n} van {total} covers zouden uitvoeren","preflight_evaluated_at":"Live controle op {time}","preflight_and_more":"en {n} meer","preflight_show_all":"Toon alle {n} voorwaarden","preflight_only_if":"Alleen als","preflight_would_block":"zou blokkeren","cond_sum_entity_state":"{entity} is {actual} (moet {expected} zijn)","cond_sum_entity_state_not":"{entity} mag niet {expected} zijn","cond_sum_cover_position":"Positie {actual}% (moet {op} {value}% zijn)","cond_sum_contact":"Contact is {actual} (moet {expected} zijn)","cond_sum_numeric":"{entity} = {actual} (moet {op} {value} zijn)","cond_sum_sun_position":"Zon op {actual} (hoogte {elev_req}, richting {az_req})","cond_sum_safety":"Raam open — veiligheidsregel blokkeert sluiten onder {ventilation}%","cond_sum_safety_clamp":"Raam open — sluit alleen omlaag tot de {ventilation}% ventilatiepositie","cond_sum_safety_ignore":"Raam open — overschrijving sluit toch volledig","cond_sum_unavailable":"{entity} is niet beschikbaar","cond_sum_position_unknown":"Huidige coverpositie is onbekend","cond_sum_no_contact":"Geen raamcontact geconfigureerd voor deze cover","cond_sum_no_facade":"Geen gevelrichting geconfigureerd voor deze cover","cond_sum_automation_disabled":"Automatisering is uitgeschakeld","cond_sum_invalid":"Ongeldige voorwaarde","today_legend_executed":"uitgevoerd","today_legend_will_run":"zal uitvoeren","today_legend_would_skip":"zou overslaan","today_legend_skipped":"overgeslagen","today_legend_partial":"deels OK","today_legend_retry":"herkansingsvenster","reason_entity_unavailable":"Entiteit {entity} was niet beschikbaar — niets werd voor veiligheid verplaatst","reason_trigger_passed":"Trigger-moment was al voorbij (bijv. herstart of herberekening na het geplande moment)","reason_waiting_facade":"Wachten tot de zon deze gevel bereikt","reason_no_facade":"Geen gevelrichting ingesteld voor deze cover","reason_sun_not_reaching":"De zon bereikt deze gevel vandaag niet","reason_already_at":"Al op {pos}% — bewegingen kleiner dan {delta}% worden overgeslagen om de motor te beschermen","reason_safety_clamped":"Raam open — gestopt op ventilatiepositie {ventilation}%; sluit volledig als het raam binnen het re-arm venster wordt gesloten","reason_service_failed":"Home Assistant service call mislukt: {error}","reason_master_off":"De automatisering hoofdschakelaar was uit","reason_cover_off":"Automatisering is voor deze cover uitgeschakeld","reason_removed":"De cover of het scenario werd uit de configuratie verwijderd","card_state_active":"Actief","card_state_off":"Uit","card_state_waiting":"Wacht","card_next_up":"Volgende","card_in_h_min":"over {h} u {m} min","card_in_h":"over {h} u","card_in_min":"over {m} min","card_now":"nu","card_covers_target":"{n} covers → {pos}","card_covers_target_one":"1 cover → {pos}","card_nothing_more":"Vandaag niets meer gepland","card_nothing_more_hint":"{done} van {total} runs zijn klaar.","card_no_plan":"Vandaag niets gepland","card_no_plan_hint":"Voor vandaag is geen scenario ingepland.","card_off_title":"Automatisering staat uit","card_off_hint":"Niets loopt vanzelf. Handmatig uitvoeren werkt nog.","card_action_run":"Nu uitvoeren","card_action_run_confirm":"Nu uitvoeren?","card_action_run_force":"Nu forceren?","card_action_disable":"Automatisering pauzeren","card_action_enable":"Inschakelen","card_last_run":"Laatste","card_waiting":"{name} wacht tot {time} op zijn voorwaarden","card_trigger_fixed_time":"Vaste tijd","card_trigger_sunrise":"Zonsopkomst","card_trigger_sunset":"Zonsondergang","card_trigger_solar_noon":"Zonnemiddag","card_trigger_sun_azimuth":"Zonrichting","card_trigger_sun_elevation":"Zonhoogte","card_timeline_empty":"Vandaag start geen scenario.","card_retry_until":"herhaalt tot {time}","card_covers_empty":"Nog geen covers ingesteld.","card_cover_next":"{time} → {pos} %","card_cover_waiting":"wacht tot {time}","card_cover_idle":"niets gepland","card_cover_auto_off":"automatisering uit","card_cover_unavailable":"Niet beschikbaar","card_cover_window_open":"Raam open","card_cover_window_tilted":"Raam gekanteld","card_cover_open":"{name} openen","card_cover_stop":"{name} stoppen","card_cover_close":"{name} sluiten","card_scenarios_empty":"Nog geen scenario's ingesteld.","card_scn_today":"Vandaag {time}","card_scn_not_today":"Vandaag niet gepland","card_scn_disabled":"Uitgeschakeld","card_scn_no_covers":"Geen covers toegewezen","card_scn_run":"{name} uitvoeren","card_scn_confirm":"Uitvoeren?","card_scn_confirm_force":"Forceren?","card_cancel":"Annuleren","card_run_nothing":"Niets te doen","card_open_panel":"Advanced Cover openen","card_pick_entry":"Meerdere Advanced Cover-items — kies er een in de kaartinstellingen.","card_no_entry":"Advanced Cover is niet ingesteld.","card_loading":"Laden…","card_ed_title":"Advanced Cover-kaart","card_ed_entry":"Item","card_ed_entry_auto":"Automatisch","card_ed_card_title":"Titel","card_ed_header":"Koptekst tonen","card_ed_compact":"Compacte weergave","card_ed_compact_help":"Eén tegelrij met de volgende run in plaats van de secties.","card_ed_sections":"Secties","card_ed_sections_help":"Kies wat de kaart toont en in welke volgorde.","card_ed_sec_next":"Volgende","card_ed_sec_next_help":"Het volgende scenario met aftelling en live-check.","card_ed_sec_timeline":"Dagtijdlijn","card_ed_sec_timeline_help":"De runs van vandaag op de dag-nachtbalk.","card_ed_sec_covers":"Covers","card_ed_sec_covers_help":"Positie, raamcontact en bediening per cover.","card_ed_sec_scenarios":"Scenario's","card_ed_sec_scenarios_help":"Losse scenario's handmatig uitvoeren.","card_ed_move_up":"Omhoog","card_ed_move_down":"Omlaag","card_ed_next_run":"Knop ‘Nu uitvoeren’","card_ed_next_toggle":"Knop automatisering aan/uit","card_ed_last_run":"Laatste run tonen","card_ed_tl_list":"Runs van vandaag tonen","card_ed_tl_legend":"Legenda tonen","card_ed_covers_which":"Getoonde covers","card_ed_scn_which":"Getoonde scenario's","card_ed_all":"Alle","card_ed_pick":"Selectie","card_ed_group_area":"Groeperen per ruimte","card_ed_controls":"Knoppen open, stop en dicht","card_ed_confirm":"Vragen voor het uitvoeren","card_ed_ignore":"Voorwaarden negeren","card_ed_ignore_help":"Handmatige runs slaan de voorwaarden van het scenario over. De veiligheidsregel voor het raam blijft gelden.","card_master_info":"Automatiseringsschakelaar tonen","card_ed_runs":"Handmatige runs","card_ed_runs_help":"Geldt voor elke uitvoerknop op de kaart.","card_ed_entry_gone":"{id} (bestaat niet meer)"}};
+var translations = {"de":{"errors_request_failed":"Anfrage fehlgeschlagen","status_planned":"Geplant","status_executed":"Ausgeführt","status_skipped":"Übersprungen","status_armed":"Wartet","status_expired":"Abgelaufen","status_blocked_safety":"Blockiert","status_unavailable":"Nicht verfügbar","status_done":"Erledigt","status_idle":"Geplant","covers_no_area":"Ohne Raum","contact_closed":"Geschlossen","contact_tilted":"Gekippt","contact_open":"Offen","contact_unknown":"Unbekannt","cond_op_above":"über","cond_op_below":"unter","cond_op_between":"zwischen","preflight_would_run":"Würde jetzt greifen","preflight_would_skip":"Würde jetzt übersprungen","preflight_unknown":"Nicht auswertbar","preflight_reason":"Blockiert durch: {reason}","preflight_partial":"{n} von {total} Rollos würden greifen","preflight_evaluated_at":"Live-Prüfung um {time}","preflight_and_more":"und {n} weitere","preflight_show_all":"Alle {n} Bedingungen anzeigen","preflight_only_if":"Nur wenn","preflight_would_block":"würde blockieren","cond_sum_entity_state":"{entity} ist {actual} (braucht {expected})","cond_sum_entity_state_not":"{entity} darf nicht {expected} sein","cond_sum_cover_position":"Position {actual}% (braucht {op} {value}%)","cond_sum_contact":"Kontakt ist {actual} (braucht {expected})","cond_sum_numeric":"{entity} = {actual} (braucht {op} {value})","cond_sum_sun_position":"Sonnenstand {actual} (Höhe {elev_req}, Richtung {az_req})","cond_sum_safety":"Fenster offen — Sicherheitsregel blockiert Schließen unter {ventilation}%","cond_sum_safety_clamp":"Fenster offen — schließt nur bis zur Lüftungsposition {ventilation}%","cond_sum_safety_ignore":"Fenster offen — Übersteuerung schließt trotzdem komplett","cond_sum_unavailable":"{entity} ist nicht verfügbar","cond_sum_position_unknown":"Aktuelle Position des Rollos ist unbekannt","cond_sum_no_contact":"Kein Fensterkontakt für dieses Rollo hinterlegt","cond_sum_no_facade":"Keine Fassadenrichtung für dieses Rollo hinterlegt","cond_sum_automation_disabled":"Automatik ist deaktiviert","cond_sum_invalid":"Ungültige Bedingung","today_legend_executed":"ausgeführt","today_legend_will_run":"läuft noch","today_legend_would_skip":"würde überspringen","today_legend_skipped":"übersprungen","today_legend_partial":"teilweise OK","today_legend_retry":"Wiederholungsfenster","reason_entity_unavailable":"Entität {entity} war nicht verfügbar — zur Sicherheit wurde nichts bewegt","reason_trigger_passed":"Auslösezeit war bereits vorbei (z. B. Neustart oder Neuberechnung nach der geplanten Zeit)","reason_waiting_facade":"Wartet, bis die Sonne diese Fassade erreicht","reason_no_facade":"Keine Ausrichtung für dieses Cover hinterlegt","reason_sun_not_reaching":"Die Sonne erreicht diese Fassade heute nicht","reason_already_at":"Bereits auf {pos}% — Bewegungen unter {delta}% werden zum Schutz des Motors übersprungen","reason_safety_clamped":"Fenster offen — auf Lüftungsposition {ventilation}% gestoppt; schließt vollständig, wenn das Fenster im Nachlauf-Fenster geschlossen wird","reason_service_failed":"Home-Assistant-Serviceaufruf fehlgeschlagen: {error}","reason_master_off":"Der Automatik-Hauptschalter war ausgeschaltet","reason_cover_off":"Die Automatik ist für dieses Cover deaktiviert","reason_removed":"Das Cover oder Szenario wurde aus der Konfiguration entfernt","card_state_active":"Aktiv","card_state_off":"Aus","card_state_waiting":"Wartet","card_next_up":"Als Nächstes","card_in_h_min":"in {h} h {m} min","card_in_h":"in {h} h","card_in_min":"in {m} min","card_now":"jetzt","card_covers_target":"{n} Rollos → {pos}","card_covers_target_one":"1 Rollo → {pos}","card_nothing_more":"Heute nichts mehr geplant","card_nothing_more_hint":"{done} von {total} Läufen sind durch.","card_no_plan":"Heute nichts geplant","card_no_plan_hint":"Für heute ist kein Szenario eingeplant.","card_off_title":"Automatik ist aus","card_off_hint":"Nichts läuft von selbst. Manuelles Ausführen geht weiter.","card_action_run":"Jetzt ausführen","card_action_run_confirm":"Jetzt ausführen?","card_action_run_force":"Jetzt erzwingen?","card_action_disable":"Automatik pausieren","card_action_enable":"Einschalten","card_last_run":"Zuletzt","card_waiting":"{name} wartet bis {time} auf seine Bedingungen","card_trigger_fixed_time":"Feste Uhrzeit","card_trigger_sunrise":"Sonnenaufgang","card_trigger_sunset":"Sonnenuntergang","card_trigger_solar_noon":"Sonnenhöchststand","card_trigger_sun_azimuth":"Sonnenrichtung","card_trigger_sun_elevation":"Sonnenhöhe","card_timeline_empty":"Heute löst kein Szenario aus.","card_retry_until":"Nachlauf bis {time}","card_covers_empty":"Noch keine Rollos angelegt.","card_cover_next":"{time} → {pos} %","card_cover_waiting":"wartet bis {time}","card_cover_idle":"nichts geplant","card_cover_auto_off":"Automatik aus","card_cover_unavailable":"Nicht verfügbar","card_cover_window_open":"Fenster offen","card_cover_window_tilted":"Fenster gekippt","card_cover_open":"{name} öffnen","card_cover_stop":"{name} stoppen","card_cover_close":"{name} schließen","card_scenarios_empty":"Noch keine Szenarien angelegt.","card_scn_today":"Heute {time}","card_scn_not_today":"Heute nicht geplant","card_scn_disabled":"Deaktiviert","card_scn_no_covers":"Keine Rollos zugewiesen","card_scn_run":"{name} ausführen","card_scn_confirm":"Ausführen?","card_scn_confirm_force":"Erzwingen?","card_cancel":"Abbrechen","card_run_nothing":"Nichts zu tun","card_open_panel":"Advanced Cover öffnen","card_pick_entry":"Mehrere Advanced-Cover-Einträge — wähle einen in den Karteneinstellungen.","card_no_entry":"Advanced Cover ist nicht eingerichtet.","card_loading":"Lädt…","card_ed_title":"Advanced-Cover-Karte","card_ed_entry":"Eintrag","card_ed_entry_auto":"Automatisch","card_ed_card_title":"Titel","card_ed_header":"Kopfzeile anzeigen","card_ed_compact":"Kompaktes Layout","card_ed_compact_help":"Eine Kachelzeile mit dem nächsten Lauf statt der Bereiche.","card_ed_sections":"Bereiche","card_ed_sections_help":"Wähle, was die Karte zeigt und in welcher Reihenfolge.","card_ed_sec_next":"Als Nächstes","card_ed_sec_next_help":"Das nächste Szenario mit Countdown und Live-Check.","card_ed_sec_timeline":"Tagesverlauf","card_ed_sec_timeline_help":"Die heutigen Läufe auf dem Tag-Nacht-Band.","card_ed_sec_covers":"Rollos","card_ed_sec_covers_help":"Position, Fensterkontakt und Steuerung je Rollo.","card_ed_sec_scenarios":"Szenarien","card_ed_sec_scenarios_help":"Einzelne Szenarien von Hand ausführen.","card_ed_move_up":"Nach oben","card_ed_move_down":"Nach unten","card_ed_next_run":"Knopf „Jetzt ausführen“","card_ed_next_toggle":"Knopf Automatik an/aus","card_ed_last_run":"Letzten Lauf anzeigen","card_ed_tl_list":"Heutige Läufe auflisten","card_ed_tl_legend":"Legende anzeigen","card_ed_covers_which":"Angezeigte Rollos","card_ed_scn_which":"Angezeigte Szenarien","card_ed_all":"Alle","card_ed_pick":"Auswahl","card_ed_group_area":"Nach Raum gruppieren","card_ed_controls":"Knöpfe Auf, Stopp und Zu","card_ed_confirm":"Vor dem Ausführen nachfragen","card_ed_ignore":"Bedingungen ignorieren","card_ed_ignore_help":"Manuelle Läufe übergehen die Bedingungen des Szenarios. Die Sicherheitsregel am Fenster gilt weiter.","card_master_info":"Automatik-Schalter anzeigen","card_ed_runs":"Manuelle Läufe","card_ed_runs_help":"Gilt für jeden Ausführen-Knopf der Karte.","card_ed_entry_gone":"{id} (existiert nicht mehr)","card_cover_auto":"Automatik für {name}","card_ed_cover_auto":"Automatik je Rollo schaltbar","card_tomorrow":"Morgen {time} · {name}"},"en":{"errors_request_failed":"Request failed","status_planned":"Planned","status_executed":"Executed","status_skipped":"Skipped","status_armed":"Waiting","status_expired":"Expired","status_blocked_safety":"Blocked","status_unavailable":"Unavailable","status_done":"Done","status_idle":"Planned","covers_no_area":"No area","contact_closed":"Closed","contact_tilted":"Tilted","contact_open":"Open","contact_unknown":"Unknown","cond_op_above":"above","cond_op_below":"below","cond_op_between":"between","preflight_would_run":"Would run now","preflight_would_skip":"Would be skipped now","preflight_unknown":"Cannot be evaluated","preflight_reason":"Blocked by: {reason}","preflight_partial":"{n} of {total} covers would run","preflight_evaluated_at":"Live check at {time}","preflight_and_more":"and {n} more","preflight_show_all":"Show all {n} conditions","preflight_only_if":"Only if","preflight_would_block":"would block","cond_sum_entity_state":"{entity} is {actual} (needs {expected})","cond_sum_entity_state_not":"{entity} must not be {expected}","cond_sum_cover_position":"Position {actual}% (needs {op} {value}%)","cond_sum_contact":"Contact is {actual} (needs {expected})","cond_sum_numeric":"{entity} = {actual} (needs {op} {value})","cond_sum_sun_position":"Sun at {actual} (height {elev_req}, direction {az_req})","cond_sum_safety":"Window open — safety rule blocks closing below {ventilation}%","cond_sum_safety_clamp":"Window open — will only close down to the {ventilation}% ventilation position","cond_sum_safety_ignore":"Window open — override closes fully anyway","cond_sum_unavailable":"{entity} is unavailable","cond_sum_position_unknown":"Current cover position is unknown","cond_sum_no_contact":"No window contact configured for this cover","cond_sum_no_facade":"No facade direction configured for this cover","cond_sum_automation_disabled":"Automation is disabled","cond_sum_invalid":"Invalid condition","today_legend_executed":"executed","today_legend_will_run":"will run","today_legend_would_skip":"would skip","today_legend_skipped":"skipped","today_legend_partial":"partly OK","today_legend_retry":"retry window","reason_entity_unavailable":"Entity {entity} was unavailable — nothing was moved for safety","reason_trigger_passed":"Trigger time had already passed (e.g. restart or recalculation after the planned time)","reason_waiting_facade":"Waiting until the sun reaches this facade","reason_no_facade":"No facade direction set for this cover","reason_sun_not_reaching":"The sun does not reach this facade today","reason_already_at":"Already at {pos}% — moves smaller than {delta}% are skipped to protect the motor","reason_safety_clamped":"Window open — stopped at the ventilation position {ventilation}%; closes fully if the window is shut within the re-arm window","reason_service_failed":"Home Assistant service call failed: {error}","reason_master_off":"The automation master switch was off","reason_cover_off":"Automation is switched off for this cover","reason_removed":"The cover or scenario was removed from the configuration","card_state_active":"Active","card_state_off":"Off","card_state_waiting":"Waiting","card_next_up":"Next up","card_in_h_min":"in {h} h {m} min","card_in_h":"in {h} h","card_in_min":"in {m} min","card_now":"now","card_covers_target":"{n} covers → {pos}","card_covers_target_one":"1 cover → {pos}","card_nothing_more":"Nothing else planned today","card_nothing_more_hint":"{done} of {total} runs are through.","card_no_plan":"Nothing planned today","card_no_plan_hint":"No scenario is scheduled for today.","card_off_title":"Automation is off","card_off_hint":"Nothing runs on its own. Manual runs still work.","card_action_run":"Run now","card_action_run_confirm":"Run now?","card_action_run_force":"Force now?","card_action_disable":"Pause automation","card_action_enable":"Switch on","card_last_run":"Last","card_waiting":"{name} waits for its conditions until {time}","card_trigger_fixed_time":"Fixed time","card_trigger_sunrise":"Sunrise","card_trigger_sunset":"Sunset","card_trigger_solar_noon":"Solar noon","card_trigger_sun_azimuth":"Sun direction","card_trigger_sun_elevation":"Sun elevation","card_timeline_empty":"No scenario fires today.","card_retry_until":"retries until {time}","card_covers_empty":"No covers set up yet.","card_cover_next":"{time} → {pos} %","card_cover_waiting":"waits until {time}","card_cover_idle":"nothing planned","card_cover_auto_off":"automation off","card_cover_unavailable":"Unavailable","card_cover_window_open":"Window open","card_cover_window_tilted":"Window tilted","card_cover_open":"Open {name}","card_cover_stop":"Stop {name}","card_cover_close":"Close {name}","card_scenarios_empty":"No scenarios set up yet.","card_scn_today":"Today {time}","card_scn_not_today":"Not scheduled today","card_scn_disabled":"Disabled","card_scn_no_covers":"No covers assigned","card_scn_run":"Run {name}","card_scn_confirm":"Run?","card_scn_confirm_force":"Force?","card_cancel":"Cancel","card_run_nothing":"Nothing to do","card_open_panel":"Open Advanced Cover","card_pick_entry":"Several Advanced Cover entries — pick one in the card settings.","card_no_entry":"Advanced Cover is not set up.","card_loading":"Loading…","card_ed_title":"Advanced Cover card","card_ed_entry":"Entry","card_ed_entry_auto":"Automatic","card_ed_card_title":"Title","card_ed_header":"Show header","card_ed_compact":"Compact layout","card_ed_compact_help":"One tile-style row with the next run instead of the sections.","card_ed_sections":"Sections","card_ed_sections_help":"Pick what the card shows and in which order.","card_ed_sec_next":"Next up","card_ed_sec_next_help":"The next scenario with countdown and live check.","card_ed_sec_timeline":"Day timeline","card_ed_sec_timeline_help":"Today's runs on the day and night strip.","card_ed_sec_covers":"Covers","card_ed_sec_covers_help":"Position, window contact and controls per cover.","card_ed_sec_scenarios":"Scenarios","card_ed_sec_scenarios_help":"Run single scenarios by hand.","card_ed_move_up":"Move up","card_ed_move_down":"Move down","card_ed_next_run":"“Run now” button","card_ed_next_toggle":"Automation on/off button","card_ed_last_run":"Show the last run","card_ed_tl_list":"List today's runs","card_ed_tl_legend":"Show the legend","card_ed_covers_which":"Covers to list","card_ed_scn_which":"Scenarios to list","card_ed_all":"All","card_ed_pick":"Pick","card_ed_group_area":"Group by area","card_ed_controls":"Open, stop and close buttons","card_ed_confirm":"Ask before running","card_ed_ignore":"Ignore conditions","card_ed_ignore_help":"Manual runs skip the scenario's conditions. The window safety rule still applies.","card_master_info":"Show the automation switch","card_ed_runs":"Manual runs","card_ed_runs_help":"Applies to every run button on the card.","card_ed_entry_gone":"{id} (no longer exists)","card_cover_auto":"Automation for {name}","card_ed_cover_auto":"Automation switch per cover","card_tomorrow":"Tomorrow {time} · {name}"},"nl":{"errors_request_failed":"Aanvraag mislukt","status_planned":"Gepland","status_executed":"Uitgevoerd","status_skipped":"Overgeslagen","status_armed":"Wachten","status_expired":"Verlopen","status_blocked_safety":"Geblokkeerd","status_unavailable":"Niet beschikbaar","status_done":"Klaar","status_idle":"Gepland","covers_no_area":"Geen ruimte","contact_closed":"Gesloten","contact_tilted":"Gekanteld","contact_open":"Open","contact_unknown":"Onbekend","cond_op_above":"boven","cond_op_below":"onder","cond_op_between":"tussen","preflight_would_run":"Zou nu uitvoeren","preflight_would_skip":"Zou nu worden overgeslagen","preflight_unknown":"Kan niet worden geëvalueerd","preflight_reason":"Geblokkeerd door: {reason}","preflight_partial":"{n} van {total} covers zouden uitvoeren","preflight_evaluated_at":"Live controle op {time}","preflight_and_more":"en {n} meer","preflight_show_all":"Toon alle {n} voorwaarden","preflight_only_if":"Alleen als","preflight_would_block":"zou blokkeren","cond_sum_entity_state":"{entity} is {actual} (moet {expected} zijn)","cond_sum_entity_state_not":"{entity} mag niet {expected} zijn","cond_sum_cover_position":"Positie {actual}% (moet {op} {value}% zijn)","cond_sum_contact":"Contact is {actual} (moet {expected} zijn)","cond_sum_numeric":"{entity} = {actual} (moet {op} {value} zijn)","cond_sum_sun_position":"Zon op {actual} (hoogte {elev_req}, richting {az_req})","cond_sum_safety":"Raam open — veiligheidsregel blokkeert sluiten onder {ventilation}%","cond_sum_safety_clamp":"Raam open — sluit alleen omlaag tot de {ventilation}% ventilatiepositie","cond_sum_safety_ignore":"Raam open — overschrijving sluit toch volledig","cond_sum_unavailable":"{entity} is niet beschikbaar","cond_sum_position_unknown":"Huidige coverpositie is onbekend","cond_sum_no_contact":"Geen raamcontact geconfigureerd voor deze cover","cond_sum_no_facade":"Geen gevelrichting geconfigureerd voor deze cover","cond_sum_automation_disabled":"Automatisering is uitgeschakeld","cond_sum_invalid":"Ongeldige voorwaarde","today_legend_executed":"uitgevoerd","today_legend_will_run":"zal uitvoeren","today_legend_would_skip":"zou overslaan","today_legend_skipped":"overgeslagen","today_legend_partial":"deels OK","today_legend_retry":"herkansingsvenster","reason_entity_unavailable":"Entiteit {entity} was niet beschikbaar — niets werd voor veiligheid verplaatst","reason_trigger_passed":"Trigger-moment was al voorbij (bijv. herstart of herberekening na het geplande moment)","reason_waiting_facade":"Wachten tot de zon deze gevel bereikt","reason_no_facade":"Geen gevelrichting ingesteld voor deze cover","reason_sun_not_reaching":"De zon bereikt deze gevel vandaag niet","reason_already_at":"Al op {pos}% — bewegingen kleiner dan {delta}% worden overgeslagen om de motor te beschermen","reason_safety_clamped":"Raam open — gestopt op ventilatiepositie {ventilation}%; sluit volledig als het raam binnen het re-arm venster wordt gesloten","reason_service_failed":"Home Assistant service call mislukt: {error}","reason_master_off":"De automatisering hoofdschakelaar was uit","reason_cover_off":"Automatisering is voor deze cover uitgeschakeld","reason_removed":"De cover of het scenario werd uit de configuratie verwijderd","card_state_active":"Actief","card_state_off":"Uit","card_state_waiting":"Wacht","card_next_up":"Volgende","card_in_h_min":"over {h} u {m} min","card_in_h":"over {h} u","card_in_min":"over {m} min","card_now":"nu","card_covers_target":"{n} covers → {pos}","card_covers_target_one":"1 cover → {pos}","card_nothing_more":"Vandaag niets meer gepland","card_nothing_more_hint":"{done} van {total} runs zijn klaar.","card_no_plan":"Vandaag niets gepland","card_no_plan_hint":"Voor vandaag is geen scenario ingepland.","card_off_title":"Automatisering staat uit","card_off_hint":"Niets loopt vanzelf. Handmatig uitvoeren werkt nog.","card_action_run":"Nu uitvoeren","card_action_run_confirm":"Nu uitvoeren?","card_action_run_force":"Nu forceren?","card_action_disable":"Automatisering pauzeren","card_action_enable":"Inschakelen","card_last_run":"Laatste","card_waiting":"{name} wacht tot {time} op zijn voorwaarden","card_trigger_fixed_time":"Vaste tijd","card_trigger_sunrise":"Zonsopkomst","card_trigger_sunset":"Zonsondergang","card_trigger_solar_noon":"Zonnemiddag","card_trigger_sun_azimuth":"Zonrichting","card_trigger_sun_elevation":"Zonhoogte","card_timeline_empty":"Vandaag start geen scenario.","card_retry_until":"herhaalt tot {time}","card_covers_empty":"Nog geen covers ingesteld.","card_cover_next":"{time} → {pos} %","card_cover_waiting":"wacht tot {time}","card_cover_idle":"niets gepland","card_cover_auto_off":"automatisering uit","card_cover_unavailable":"Niet beschikbaar","card_cover_window_open":"Raam open","card_cover_window_tilted":"Raam gekanteld","card_cover_open":"{name} openen","card_cover_stop":"{name} stoppen","card_cover_close":"{name} sluiten","card_scenarios_empty":"Nog geen scenario's ingesteld.","card_scn_today":"Vandaag {time}","card_scn_not_today":"Vandaag niet gepland","card_scn_disabled":"Uitgeschakeld","card_scn_no_covers":"Geen covers toegewezen","card_scn_run":"{name} uitvoeren","card_scn_confirm":"Uitvoeren?","card_scn_confirm_force":"Forceren?","card_cancel":"Annuleren","card_run_nothing":"Niets te doen","card_open_panel":"Advanced Cover openen","card_pick_entry":"Meerdere Advanced Cover-items — kies er een in de kaartinstellingen.","card_no_entry":"Advanced Cover is niet ingesteld.","card_loading":"Laden…","card_ed_title":"Advanced Cover-kaart","card_ed_entry":"Item","card_ed_entry_auto":"Automatisch","card_ed_card_title":"Titel","card_ed_header":"Koptekst tonen","card_ed_compact":"Compacte weergave","card_ed_compact_help":"Eén tegelrij met de volgende run in plaats van de secties.","card_ed_sections":"Secties","card_ed_sections_help":"Kies wat de kaart toont en in welke volgorde.","card_ed_sec_next":"Volgende","card_ed_sec_next_help":"Het volgende scenario met aftelling en live-check.","card_ed_sec_timeline":"Dagtijdlijn","card_ed_sec_timeline_help":"De runs van vandaag op de dag-nachtbalk.","card_ed_sec_covers":"Covers","card_ed_sec_covers_help":"Positie, raamcontact en bediening per cover.","card_ed_sec_scenarios":"Scenario's","card_ed_sec_scenarios_help":"Losse scenario's handmatig uitvoeren.","card_ed_move_up":"Omhoog","card_ed_move_down":"Omlaag","card_ed_next_run":"Knop ‘Nu uitvoeren’","card_ed_next_toggle":"Knop automatisering aan/uit","card_ed_last_run":"Laatste run tonen","card_ed_tl_list":"Runs van vandaag tonen","card_ed_tl_legend":"Legenda tonen","card_ed_covers_which":"Getoonde covers","card_ed_scn_which":"Getoonde scenario's","card_ed_all":"Alle","card_ed_pick":"Selectie","card_ed_group_area":"Groeperen per ruimte","card_ed_controls":"Knoppen open, stop en dicht","card_ed_confirm":"Vragen voor het uitvoeren","card_ed_ignore":"Voorwaarden negeren","card_ed_ignore_help":"Handmatige runs slaan de voorwaarden van het scenario over. De veiligheidsregel voor het raam blijft gelden.","card_master_info":"Automatiseringsschakelaar tonen","card_ed_runs":"Handmatige runs","card_ed_runs_help":"Geldt voor elke uitvoerknop op de kaart.","card_ed_entry_gone":"{id} (bestaat niet meer)","card_cover_auto":"Automatisering voor {name}","card_ed_cover_auto":"Automatisering per cover schakelbaar","card_tomorrow":"Morgen {time} · {name}"}};
 
 const PREFIX = `component.${TRANSLATION_DOMAIN}.config_panel.`;
 function language(hass) {
@@ -684,15 +737,34 @@ const time = (iso) => {
 };
 /** Stable key of one plan block (same shape the panel uses). */
 const occKey = (occ) => `${occ.scenario_id}@${occ.planned_at}`;
-/** The next block that has not fired yet, or null when the day is done.
+/** The next thing the plan will do, or null when the day is done.
 
-    A block without covers moves nothing, so it is not "next" (the backend's
-    next-run sensor skips it too). */
+    Usually a block that has not fired yet, with all its covers. A
+    facade-relative block is different: it fires with its first facade and
+    keeps the other covers armed for their own, later turn — those turns are
+    still "next" although the block counts as fired. A block without covers
+    moves nothing and is never next (the backend's next-run sensor skips it
+    too). */
 function nextUp(plan, nowMs) {
-    const upcoming = plan
-        .filter((occ) => !occ.fired && occ.assignments.length > 0 && time(occ.planned_at) >= nowMs)
-        .sort((a, b) => time(a.planned_at) - time(b.planned_at));
-    return upcoming[0] ?? null;
+    const candidates = [];
+    for (const occ of plan) {
+        if (!occ.assignments.length)
+            continue;
+        if (!occ.fired) {
+            if (time(occ.planned_at) >= nowMs) {
+                candidates.push({ occ, at: occ.planned_at, runs: occ.assignments });
+            }
+            continue;
+        }
+        const pending = occ.assignments
+            .filter((run) => run.status === "armed" && run.fire_at && time(run.fire_at) > nowMs)
+            .sort((a, b) => time(a.fire_at) - time(b.fire_at));
+        if (pending.length) {
+            candidates.push({ occ, at: pending[0].fire_at, runs: pending });
+        }
+    }
+    candidates.sort((a, b) => time(a.at) - time(b.at));
+    return candidates[0] ?? null;
 }
 /** The block that fired most recently, or null before the first one. */
 function lastRun(plan) {
@@ -722,9 +794,13 @@ function positionsLabel(positions) {
     const high = Math.max(...positions);
     return low === high ? `${low} %` : `${low}–${high} %`;
 }
+/** Distinct targets of a set of runs (a block's covers, or some of them). */
+function runPositions(runs) {
+    return [...new Set(runs.map((run) => run.target_position))];
+}
 /** Distinct targets of one plan block's covers. */
 function occPositions(occ) {
-    return [...new Set(occ.assignments.map((run) => run.target_position))];
+    return runPositions(occ.assignments);
 }
 /** Today's block of a scenario — the upcoming one first, else the last fired. */
 function scenarioOccurrence(scenario, plan) {
@@ -1258,6 +1334,20 @@ const cardStyles = i$3 `
     margin-top: 4px;
     text-wrap: pretty;
   }
+  .tomorrow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    font-size: 13px;
+    color: var(--ac-fg);
+    font-variant-numeric: tabular-nums;
+  }
+  .tomorrow ha-icon {
+    --mdc-icon-size: 17px;
+    color: var(--ac-fg2);
+    flex: none;
+  }
   .note {
     display: flex;
     align-items: flex-start;
@@ -1625,6 +1715,33 @@ const cardStyles = i$3 `
     }
   }
 
+  /* Per-cover automation switch. */
+  .auto {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    flex: none;
+    border-radius: 10px;
+    border: 1px solid var(--ac-div);
+    background: none;
+    color: var(--ac-off);
+    --mdc-icon-size: 19px;
+  }
+  .auto.on {
+    color: var(--ac-pri);
+    background: var(--ac-tint);
+    border-color: color-mix(in srgb, var(--ac-pri) 40%, transparent);
+  }
+  .auto:hover:not(:disabled) {
+    filter: brightness(1.15);
+  }
+  :host([data-narrow]) .auto {
+    width: 32px;
+  }
+
   .ctrl {
     display: inline-flex;
     flex: none;
@@ -1844,6 +1961,7 @@ const DEFAULT_CONFIG = {
     covers: "all",
     group_by_area: true,
     cover_controls: true,
+    cover_automation: false,
     scenarios: "all",
     confirm_run: true,
     ignore_conditions: false,
@@ -1887,7 +2005,7 @@ function validateConfig(config) {
 const SECTION_KEYS = {
     next: ["next_actions", "show_last_run"],
     timeline: ["timeline_list", "timeline_legend"],
-    covers: ["covers", "group_by_area", "cover_controls"],
+    covers: ["covers", "group_by_area", "cover_controls", "cover_automation"],
     scenarios: ["scenarios"],
 };
 class AdvancedCoverCardEditor extends i {
@@ -2158,6 +2276,7 @@ class AdvancedCoverCardEditor extends i {
           ${this._picker("covers", "card_ed_covers_which", this._snapshot?.covers ?? [])}
           ${this._toggleRow("card_ed_group_area", "group_by_area")}
           ${this._toggleRow("card_ed_controls", "cover_controls")}
+          ${this._toggleRow("card_ed_cover_auto", "cover_automation")}
         `;
             default:
                 return b `
@@ -2830,6 +2949,9 @@ class AdvancedCoverCard extends i {
         const enabled = !this._snapshot?.enabled;
         void this._act("master", () => setEnabled(this.hass, enabled, this._config?.entry_id));
     }
+    _toggleCoverAutomation(cover) {
+        void this._act(`auto:${cover.id}`, () => setCoverEnabled(this.hass, cover.id, !cover.enabled, this._config?.entry_id));
+    }
     _drive(cover, command) {
         void this._act(`cover:${cover.id}:${command}`, () => driveCover(this.hass, cover.id, command, this._config?.entry_id));
     }
@@ -2849,6 +2971,7 @@ class AdvancedCoverCard extends i {
     render() {
         if (!this.hass || !this._config)
             return A;
+        useTimeZone(this.hass);
         const snap = this._snapshot;
         if (this._error || !snap) {
             return b `<ha-card>
@@ -3038,7 +3161,8 @@ class AdvancedCoverCard extends i {
         const cfg = this._cfg;
         const showRun = cfg.next_actions.includes("run");
         const showToggle = cfg.next_actions.includes("toggle");
-        const next = snap.enabled ? nextUp(snap.plan, Date.now()) : null;
+        const up = snap.enabled ? nextUp(snap.plan, Date.now()) : null;
+        const next = up?.occ ?? null;
         let main;
         if (!snap.enabled) {
             main = b `
@@ -3047,8 +3171,8 @@ class AdvancedCoverCard extends i {
         <div class="hint">${this._t("card_off_hint")}</div>
       `;
         }
-        else if (next) {
-            main = this._renderNextSummary(snap, next);
+        else if (up) {
+            main = this._renderNextSummary(snap, up);
         }
         else {
             const done = snap.plan.filter((occ) => occ.fired).length;
@@ -3065,6 +3189,15 @@ class AdvancedCoverCard extends i {
                 })
                 : this._t("card_no_plan_hint")}
         </div>
+        ${snap.tomorrow
+                ? b `<div class="tomorrow">
+              <ha-icon icon="mdi:calendar-arrow-right"></ha-icon>
+              ${this._t("card_tomorrow", {
+                    time: formatTime(snap.tomorrow.when),
+                    name: snap.tomorrow.scenario_name,
+                })}
+            </div>`
+                : A}
       `;
         }
         const actions = [];
@@ -3125,17 +3258,21 @@ class AdvancedCoverCard extends i {
             : A}
     `;
     }
-    _renderNextSummary(snap, occ) {
+    _renderNextSummary(snap, up) {
+        const occ = up.occ;
         const scenario = snap.scenarios.find((s) => s.id === occ.scenario_id);
         const trigger = triggerMeta(scenario?.trigger);
         const verdict = occVerdict(occ);
-        const showCheck = verdict !== "would_run" || Boolean(scenario?.has_conditions);
+        // A block that already fired (a facade-relative one with covers still to
+        // come) has no live check any more — its conditions were decided then.
+        const showCheck = !occ.fired &&
+            (verdict !== "would_run" || Boolean(scenario?.has_conditions));
         const reason = verdict === "would_run" ? null : occPreflightReason(this._l, occ);
         return b `
       <div class="label">${this._t("card_next_up")}</div>
       <div class="clock-row">
-        <span class="clock">${formatTime(occ.planned_at)}</span>
-        <span class="lead">${this._lead(occ.planned_at)}</span>
+        <span class="clock">${formatTime(up.at)}</span>
+        <span class="lead">${this._lead(up.at)}</span>
       </div>
       <div class="next-name">${occ.scenario_name}</div>
       <div class="facts">
@@ -3145,7 +3282,7 @@ class AdvancedCoverCard extends i {
         </span>
         <span>
           <ha-icon icon="mdi:window-shutter"></ha-icon>
-          ${this._coversTarget(occ.assignments.length, occPositions(occ))}
+          ${this._coversTarget(up.runs.length, runPositions(up.runs))}
         </span>
       </div>
       ${showCheck
@@ -3200,7 +3337,7 @@ class AdvancedCoverCard extends i {
             events,
             sunriseMin: snap.sun.sunrise ? minutesOfDay(snap.sun.sunrise) : null,
             sunsetMin: snap.sun.sunset ? minutesOfDay(snap.sun.sunset) : null,
-            nowMin: now.getHours() * 60 + now.getMinutes(),
+            nowMin: minutesOfDay(now.toISOString()) ?? 0,
             axisEveryH: this._narrow ? 6 : 3,
         })}
       ${cfg.timeline_legend ? this._renderLegend() : A}
@@ -3470,6 +3607,22 @@ class AdvancedCoverCard extends i {
           ${this._renderCoverSub(cover, live.available)}
         </span>
       </button>
+      ${this._cfg.cover_automation
+            ? b `<button
+            type="button"
+            class="auto ${cover.enabled ? "on" : ""}"
+            role="switch"
+            aria-checked=${cover.enabled ? "true" : "false"}
+            title=${this._t("card_cover_auto", { name: cover.name })}
+            aria-label=${this._t("card_cover_auto", { name: cover.name })}
+            .disabled=${this._isBusy(`auto:${cover.id}`)}
+            @click=${() => this._toggleCoverAutomation(cover)}
+          >
+            <ha-icon
+              icon=${cover.enabled ? "mdi:robot-outline" : "mdi:robot-off-outline"}
+            ></ha-icon>
+          </button>`
+            : A}
       ${this._cfg.cover_controls
             ? b `<span class="ctrl">
             ${button("open", icons.open, live.position === 100 && !live.moving)}
@@ -3591,14 +3744,21 @@ class AdvancedCoverCard extends i {
     }
     // ---- compact tile -------------------------------------------------------
     _renderCompact(snap) {
-        const next = snap.enabled ? nextUp(snap.plan, Date.now()) : null;
+        const up = snap.enabled ? nextUp(snap.plan, Date.now()) : null;
+        const next = up?.occ ?? null;
         const waiting = snap.enabled && waitingRuns(snap.plan, Date.now()).length > 0;
         let sub;
         if (!snap.enabled) {
             sub = this._t("card_off_title");
         }
-        else if (next) {
-            sub = `${formatTime(next.planned_at)} · ${next.scenario_name} · ${this._lead(next.planned_at)}`;
+        else if (up) {
+            sub = `${formatTime(up.at)} · ${up.occ.scenario_name} · ${this._lead(up.at)}`;
+        }
+        else if (snap.tomorrow) {
+            sub = this._t("card_tomorrow", {
+                time: formatTime(snap.tomorrow.when),
+                name: snap.tomorrow.scenario_name,
+            });
         }
         else {
             sub = this._t(snap.plan.length ? "card_nothing_more" : "card_no_plan");

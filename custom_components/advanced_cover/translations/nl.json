@@ -581,6 +581,9 @@
     "card_master_info": "Automatiseringsschakelaar tonen",
     "card_ed_runs": "Handmatige runs",
     "card_ed_runs_help": "Geldt voor elke uitvoerknop op de kaart.",
-    "card_ed_entry_gone": "{id} (bestaat niet meer)"
+    "card_ed_entry_gone": "{id} (bestaat niet meer)",
+    "card_cover_auto": "Automatisering voor {name}",
+    "card_ed_cover_auto": "Automatisering per cover schakelbaar",
+    "card_tomorrow": "Morgen {time} · {name}"
   }
 }

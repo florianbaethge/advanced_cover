@@ -20,7 +20,7 @@ from homeassistant.components.cover import (
     DOMAIN as COVER_DOMAIN,
 )
 from homeassistant.const import ATTR_ENTITY_ID
-from homeassistant.core import Context, HomeAssistant, callback
+from homeassistant.core import CALLBACK_TYPE, Context, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.sun import get_astral_event_date
 from homeassistant.util import dt as dt_util
@@ -38,6 +38,7 @@ from .const import (
     SAFETY_MODE_CLAMP,
     SAFETY_MODE_IGNORE,
     SCRIPT_DOMAIN,
+    SUBSCRIBERS_KEY,
     SUN_ENTITY_ID,
 )
 from .coordinator import AdvancedCoverCoordinator
@@ -343,6 +344,53 @@ def _scenario_warnings(
     return warnings
 
 
+@callback
+def async_track_subscription(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+    coordinator: AdvancedCoverCoordinator,
+    push: CALLBACK_TYPE,
+) -> None:
+    """Run ``push`` on every coordinator update until the client or entry goes.
+
+    When the entry is unloaded the subscriber gets one last ``{"unloaded":
+    true}`` event instead of silence, so the panel or card can subscribe again
+    once the entry is back (a reload) rather than showing a frozen day
+    forever — and nothing keeps the old coordinator alive.
+    """
+    entry_id = coordinator.config_entry.entry_id
+    subscribers: set[CALLBACK_TYPE] = hass.data.setdefault(
+        SUBSCRIBERS_KEY, {}
+    ).setdefault(entry_id, set())
+    stop_listening = coordinator.async_add_listener(push)
+
+    @callback
+    def _release() -> None:
+        """Drop the listener and tell the client its entry went away."""
+        stop_listening()
+        connection.subscriptions.pop(msg["id"], None)
+        connection.send_message(
+            websocket_api.event_message(msg["id"], {"unloaded": True})
+        )
+
+    @callback
+    def _unsubscribe() -> None:
+        stop_listening()
+        subscribers.discard(_release)
+
+    subscribers.add(_release)
+    connection.subscriptions[msg["id"]] = _unsubscribe
+
+
+@callback
+def async_release_subscribers(hass: HomeAssistant, entry_id: str) -> None:
+    """Detach every panel and card subscribed to an entry being unloaded."""
+    subscribers = hass.data.get(SUBSCRIBERS_KEY, {}).pop(entry_id, set())
+    for release in list(subscribers):
+        release()
+
+
 def _sun_times(hass: HomeAssistant) -> dict[str, str | None]:
     """Today's sunrise, sunset and solar noon as local ISO timestamps."""
     today = dt_util.now().date()
@@ -480,7 +528,7 @@ def ws_subscribe(
             )
         )
 
-    connection.subscriptions[msg["id"]] = coordinator.async_add_listener(_push)
+    async_track_subscription(hass, connection, msg, coordinator, _push)
     connection.send_result(msg["id"])
     _push()
 
@@ -694,9 +742,10 @@ async def async_drive_cover(
 ) -> None:
     """Drive a cover directly (panel test buttons, dashboard card controls).
 
-    Manual low mode: the controls drive the low-speed entity instead of the
-    normal cover entity — stop included. With a low-mode *script* there is no
-    entity to stop, so stop goes to the normal cover entity.
+    Manual low mode: open, close and position drive the low-speed entity (or
+    script) instead of the normal cover entity. Stop always goes to the normal
+    entity: a script cannot stop a running move, and the panel promises one
+    rule for both kinds of low mode.
 
     ``context`` carries the calling user, so Home Assistant applies that
     user's entity permissions and the logbook names who moved the cover.
@@ -707,9 +756,11 @@ async def async_drive_cover(
         "stop": SERVICE_STOP_COVER,
     }
     entity_id = cover.cover_entity_id
-    if cover.manual_low_mode and cover.low_mode_entity_id:
+    if command == "stop":
+        pass
+    elif cover.manual_low_mode and cover.low_mode_entity_id:
         entity_id = cover.low_mode_entity_id
-    elif cover.manual_low_mode and cover.low_mode_script_id and command != "stop":
+    elif cover.manual_low_mode and cover.low_mode_script_id:
         target = {"open": 100, "close": 0}.get(
             command, 50 if position is None else position
         )

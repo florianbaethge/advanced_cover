@@ -552,3 +552,62 @@ async def test_restart_carryover_restores_persisted_outcomes(
     occ = coordinator.plan[0]
     assert occ.runs["c1"].status == RUN_STATE_EXPIRED
     await scheduler2.async_shutdown()
+
+
+async def test_first_occurrence_on_another_day(hass: HomeAssistant, freezer) -> None:
+    """What the card shows once today is through: tomorrow's first run."""
+    from datetime import timedelta
+
+    from homeassistant.util import dt as dt_util
+
+    await use_utc(hass)
+    # A Friday, so "tomorrow" is a Saturday.
+    freezer.move_to("2026-07-03 12:00:00+00:00")
+    cover = CoverItem(id="c1", name="One", cover_entity_id="cover.one")
+
+    def _scenario(sid: str, time_local: str, **kwargs: Any) -> Scenario:
+        return Scenario(
+            id=sid,
+            name=sid,
+            trigger=Trigger(type="fixed_time", time_local=time_local),
+            assignments=[Assignment(cover_item_id="c1")],
+            **kwargs,
+        )
+
+    weekdays_only = _scenario(
+        "weekdays", "06:00", weekdays=["mon", "tue", "wed", "thu", "fri"]
+    )
+    disabled = _scenario("disabled", "05:00", enabled=False)
+    no_covers = _scenario("no-covers", "05:30")
+    no_covers.assignments = []
+    morning = _scenario("morning", "08:00")
+    evening = _scenario("evening", "20:00")
+    data = EntryData(
+        covers={"c1": cover},
+        scenarios=[evening, weekdays_only, disabled, no_covers, morning],
+    )
+    scheduler = AdvancedCoverScheduler(
+        hass, StubCoordinator(data), StubExecutor(ExecutionOutcome(RESULT_EXECUTED))
+    )
+    await scheduler.async_rebuild_plan(catch_up=False)
+    tomorrow = dt_util.now().date() + timedelta(days=1)
+
+    first = scheduler.first_occurrence_on(tomorrow)
+
+    # Not the weekday-only one (tomorrow is Saturday), not the disabled one,
+    # not the one that moves nothing: the earliest that really fires.
+    assert first is not None
+    assert first["scenario_id"] == "morning"
+    assert first["when"].startswith(f"{tomorrow.isoformat()}T08:00")
+
+    # A config change rebuilds the plan and with it this answer.
+    morning.enabled = False
+    assert scheduler.first_occurrence_on(tomorrow)["scenario_id"] == "morning"
+    await scheduler.async_rebuild_plan(catch_up=False)
+    assert scheduler.first_occurrence_on(tomorrow)["scenario_id"] == "evening"
+
+    evening.enabled = False
+    await scheduler.async_rebuild_plan(catch_up=False)
+    assert scheduler.first_occurrence_on(tomorrow) is None
+
+    await scheduler.async_shutdown()

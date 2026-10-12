@@ -30,7 +30,7 @@ type: custom:advanced-cover-card
 |---|---|
 | `next` | The next scenario of the day: time, countdown, trigger, how many covers go where, and the **live check** ("would run now" / "would be skipped now" with the reason). Buttons run it right away or pause the whole automation. Below: scenarios waiting in their re-arm window and the last run. |
 | `timeline` | The day and night strip from the panel's Today tab with one marker per run, the now-line and re-arm windows. Tap a marker or a row to see what the run does for each cover. |
-| `covers` | Every cover with its position, window contact, next action and open / stop / close buttons. Tap a row for the cover's own dialog (with the position slider). |
+| `covers` | Every cover with its position, window contact, next action and open / stop / close buttons — optionally a switch for the cover's own automation. Tap a row for the cover's own dialog (with the position slider). |
 | `scenarios` | Every scenario with today's time and status and a button to run it by hand. |
 
 ### Next up
@@ -40,6 +40,8 @@ type: custom:advanced-cover-card
 </p>
 
 **Run now** runs the scenario as a manual, one-off run: it ignores the trigger time and does not touch today's plan — the scenario still fires at its planned time. With the automation switched off the section says so and offers to switch it back on; manual runs keep working either way.
+
+Once today's last run is through, the section names the first run of tomorrow instead. A scenario that fires each facade at its own time (trigger *relative to the facade*) stays "next" until its last cover has had its turn.
 
 The state pill in the header (*Active* / *Waiting* / *Off*) opens the automation's master switch, so the automation can be switched from a card that does not show this section.
 
@@ -58,6 +60,8 @@ The colours match the panel: green ran, blue will run, amber would be skipped ri
 </p>
 
 The little window shows how far each cover is closed (an awning the other way round: its fabric grows as it extends). The line below names the next action today, a re-arm window the cover is waiting in, an open or tilted window, or that the cover's automation is off. The buttons drive the cover directly, exactly like the test buttons in the panel — including a cover's *low mode for manual control*. They are not scenario runs, so the safety rule does not apply to them.
+
+With `cover_automation: true` every row gets a switch for that cover's own automation — the same as its `switch.<cover>_automation` entity. Switched off, scenarios leave the cover alone; the buttons and manual runs keep working.
 
 ### Scenarios
 
@@ -85,6 +89,7 @@ Every option is optional.
 | `covers` | `all` | `all` or a list of cover ids |
 | `group_by_area` | `true` | Group covers by their area (only when they sit in more than one) |
 | `cover_controls` | `true` | Open / stop / close buttons |
+| `cover_automation` | `false` | A switch per cover for its own automation |
 | `scenarios` | `all` | `all` or a list of scenario ids |
 | `confirm_run` | `true` | Ask before a manual run (every run button) |
 | `ignore_conditions` | `false` | Manual runs skip the scenario's conditions (the safety rule still applies) |
@@ -103,6 +108,7 @@ timeline_legend: true
 covers: all
 group_by_area: true
 cover_controls: true
+cover_automation: true
 scenarios: all
 confirm_run: true
 ignore_conditions: false
@@ -146,4 +152,4 @@ The card follows the integration live. If Home Assistant restarts or the integra
 
 ## Layout and theming
 
-Colours come from the active theme, so the card follows light and dark mode and any custom theme. The layout follows the card's own width, not the screen's: below about 440 px the buttons of the *next* section move under the summary, below about 380 px lists drop detail, and from about 720 px on — a panel view or a full-width section — the sections sit side by side in two columns.
+Colours come from the active theme, so the card follows light and dark mode and any custom theme. Times follow the time zone setting of your Home Assistant profile: the device's zone by default, Home Assistant's when the profile says so — the choice for a tablet or a traveller whose device runs on another clock than the house. The layout follows the card's own width, not the screen's: below about 440 px the buttons of the *next* section move under the summary, below about 380 px lists drop detail, and from about 720 px on — a panel view or a full-width section — the sections sit side by side in two columns.

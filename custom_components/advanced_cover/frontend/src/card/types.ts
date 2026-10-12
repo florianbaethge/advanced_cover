@@ -37,6 +37,8 @@ export interface CardSnapshot {
   covers: CardCover[];
   scenarios: CardScenario[];
   plan: Occurrence[];
+  /** The first run of the day after, or null when nothing is planned then. */
+  tomorrow: { when: string; scenario_id: string; scenario_name: string } | null;
   log: LogEntry[];
 }
 
@@ -78,6 +80,8 @@ export interface AdvancedCoverCardConfig {
   covers?: "all" | string[];
   group_by_area?: boolean;
   cover_controls?: boolean;
+  /** A switch per cover for its own automation. */
+  cover_automation?: boolean;
   // scenarios
   /** "all" or an explicit list of scenario ids. */
   scenarios?: "all" | string[];
@@ -98,6 +102,7 @@ export const DEFAULT_CONFIG: Required<
   covers: "all",
   group_by_area: true,
   cover_controls: true,
+  cover_automation: false,
   scenarios: "all",
   confirm_run: true,
   ignore_conditions: false,

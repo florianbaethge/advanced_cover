@@ -11,6 +11,8 @@ export interface HomeAssistant {
     language: string;
     time_format: string;
     date_format: string;
+    /** "local" (the browser's zone) or "server" (Home Assistant's). */
+    time_zone?: string;
   };
   callWS<T>(msg: Record<string, unknown>): Promise<T>;
   callService?(

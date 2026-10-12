@@ -10,7 +10,7 @@ read, and that a card is told when its entry goes away.
 from __future__ import annotations
 
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -20,9 +20,8 @@ from custom_components.advanced_cover.card_api import (
     _scenario_row,
     _snapshot,
     async_register_card_api,
-    async_release_subscribers,
 )
-from custom_components.advanced_cover.const import CARD_SUBSCRIBERS_KEY, DOMAIN
+from custom_components.advanced_cover.const import DOMAIN, SUBSCRIBERS_KEY
 from custom_components.advanced_cover.models import (
     ActionOverride,
     Assignment,
@@ -35,9 +34,14 @@ from custom_components.advanced_cover.models import (
     Trigger,
 )
 from custom_components.advanced_cover.scheduler import AssignmentRun, Occurrence
+from custom_components.advanced_cover.services import async_setup_services
+from custom_components.advanced_cover.websocket import (
+    async_register_websocket_api,
+    async_release_subscribers,
+)
 from homeassistant.auth.const import GROUP_ID_USER
-from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.core import Context, HomeAssistant
+from homeassistant.exceptions import HomeAssistantError, Unauthorized
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
@@ -77,6 +81,9 @@ class StubScheduler:
 
     def next_action_for_cover(self, cover_item_id: str) -> dict[str, Any] | None:
         return None
+
+    def first_occurrence_on(self, day: Any) -> dict[str, Any] | None:
+        return {"when": f"{day.isoformat()}T07:30:00+00:00", "scenario_name": "Up"}
 
     async def async_run_scenario(
         self,
@@ -228,6 +235,8 @@ async def test_snapshot_carries_live_state_but_no_editable_configuration(
     snap = _snapshot(hass, coordinator, scheduler)
 
     assert snap["master_entity_id"] == master
+    tomorrow = (dt_util.now() + timedelta(days=1)).date().isoformat()
+    assert snap["tomorrow"]["when"].startswith(tomorrow)
     # The live check is part of the day, and it names what it looked at: the
     # card can only say "would be skipped now" together with the reason.
     block = snap["plan"][0]
@@ -315,12 +324,12 @@ async def test_unsubscribing_releases_the_listener(
     await client.receive_json()
     await client.receive_json()
     assert len(coordinator.listeners) == 1
-    assert len(hass.data[CARD_SUBSCRIBERS_KEY]["e1"]) == 1
+    assert len(hass.data[SUBSCRIBERS_KEY]["e1"]) == 1
 
     await client.send_json({"id": 2, "type": "unsubscribe_events", "subscription": 1})
     assert (await client.receive_json())["success"] is True
     assert coordinator.listeners == []
-    assert hass.data[CARD_SUBSCRIBERS_KEY]["e1"] == set()
+    assert hass.data[SUBSCRIBERS_KEY]["e1"] == set()
 
 
 async def test_card_is_told_when_its_entry_is_unloaded(
@@ -340,7 +349,7 @@ async def test_card_is_told_when_its_entry_is_unloaded(
     assert last["event"] == {"unloaded": True}
     # Nothing keeps the old coordinator alive or pushes from it any more.
     assert coordinator.listeners == []
-    assert "e1" not in hass.data[CARD_SUBSCRIBERS_KEY]
+    assert "e1" not in hass.data[SUBSCRIBERS_KEY]
 
     # The card subscribes again; until the entry is back that is a clean error.
     await client.send_json({"id": 2, "type": f"{DOMAIN}/card/subscribe"})
@@ -570,3 +579,183 @@ async def test_snapshot_timestamps_carry_their_offset(hass: HomeAssistant) -> No
     now = datetime.fromisoformat(snap["now"])
     assert now.utcoffset() == dt_util.now().utcoffset()
     assert set(snap["sun"]) == {"sunrise", "sunset", "solar_noon"}
+
+
+def _cover_switch(hass: HomeAssistant, cover_id: str, entry_id: str = "e1") -> str:
+    """Register one cover's automation switch, as the switch platform would."""
+    return (
+        er.async_get(hass)
+        .async_get_or_create(
+            "switch", DOMAIN, f"{entry_id}_cover_{cover_id}_automation"
+        )
+        .entity_id
+    )
+
+
+async def test_household_user_can_switch_one_covers_automation(
+    hass: HomeAssistant,
+    card_api: None,
+    hass_ws_client: Any,
+    household_user: tuple[str, str],
+) -> None:
+    coordinator, _ = _install(hass)
+    _cover_switch(hass, "c1")
+    client = await hass_ws_client(hass, household_user[0])
+
+    await client.send_json(
+        {
+            "id": 1,
+            "type": f"{DOMAIN}/card/action",
+            "action": "set_cover_enabled",
+            "cover_item_id": "c1",
+            "enabled": False,
+        }
+    )
+    assert (await client.receive_json())["success"] is True
+    assert coordinator.data_model.covers["c1"].enabled is False
+    assert coordinator.data_model.covers["c2"].enabled is True
+    assert coordinator.saved == 1
+
+    await client.send_json(
+        {
+            "id": 2,
+            "type": f"{DOMAIN}/card/action",
+            "action": "set_cover_enabled",
+            "cover_item_id": "gone",
+            "enabled": False,
+        }
+    )
+    assert (await client.receive_json())["error"]["code"] == "not_found"
+
+    await client.send_json(
+        {
+            "id": 3,
+            "type": f"{DOMAIN}/card/action",
+            "action": "set_cover_enabled",
+            "cover_item_id": "c1",
+        }
+    )
+    assert (await client.receive_json())["error"]["code"] == "invalid_format"
+
+
+async def test_read_only_user_cannot_switch_a_covers_automation(
+    hass: HomeAssistant,
+    card_api: None,
+    hass_ws_client: Any,
+    hass_read_only_access_token: str,
+) -> None:
+    coordinator, _ = _install(hass)
+    _cover_switch(hass, "c1")
+    client = await hass_ws_client(hass, hass_read_only_access_token)
+
+    await client.send_json(
+        {
+            "id": 1,
+            "type": f"{DOMAIN}/card/action",
+            "action": "set_cover_enabled",
+            "cover_item_id": "c1",
+            "enabled": False,
+        }
+    )
+    assert (await client.receive_json())["error"]["code"] == "unauthorized"
+    assert coordinator.data_model.covers["c1"].enabled is True
+    assert coordinator.saved == 0
+
+
+async def test_manual_low_mode_drives_low_but_stops_the_normal_entity(
+    hass: HomeAssistant, card_api: None, hass_ws_client: Any
+) -> None:
+    """What the panel's help text promises: stop always uses the normal entity."""
+    coordinator, _ = _install(hass)
+    cover = coordinator.data_model.covers["c1"]
+    cover.manual_low_mode = True
+    cover.low_mode_entity_id = "cover.living_low"
+    calls: list[tuple[str, Any]] = []
+
+    async def _record(call: Any) -> None:
+        calls.append((call.service, call.data.get("entity_id")))
+
+    for service in ("open_cover", "close_cover", "stop_cover"):
+        hass.services.async_register("cover", service, _record)
+    client = await hass_ws_client(hass)
+
+    for msg_id, command in enumerate(("close", "stop", "open"), start=1):
+        await client.send_json(
+            {
+                "id": msg_id,
+                "type": f"{DOMAIN}/card/action",
+                "action": "cover",
+                "cover_item_id": "c1",
+                "command": command,
+            }
+        )
+        assert (await client.receive_json())["success"] is True
+
+    assert calls == [
+        ("close_cover", "cover.living_low"),
+        ("stop_cover", "cover.living"),
+        ("open_cover", "cover.living_low"),
+    ]
+
+
+async def test_panel_is_told_when_its_entry_is_unloaded(
+    hass: HomeAssistant, hass_ws_client: Any
+) -> None:
+    """The admin panel hangs on the same coordinator as the card."""
+    assert await async_setup_component(hass, "websocket_api", {})
+    async_register_websocket_api(hass)
+    coordinator, _ = _install(hass)
+    client = await hass_ws_client(hass)
+
+    await client.send_json({"id": 1, "type": f"{DOMAIN}/subscribe", "entry_id": "e1"})
+    assert (await client.receive_json())["success"] is True
+    assert (await client.receive_json())["event"]["entry_id"] == "e1"
+    assert len(coordinator.listeners) == 1
+
+    hass.data[DOMAIN].pop("e1")
+    async_release_subscribers(hass, "e1")
+
+    assert (await client.receive_json())["event"] == {"unloaded": True}
+    assert coordinator.listeners == []
+
+
+async def test_services_refuse_a_user_without_control_permission(
+    hass: HomeAssistant, hass_read_only_user: Any, hass_admin_user: Any
+) -> None:
+    """The services move covers without going through their entities."""
+    coordinator, scheduler = _install(hass)
+    _cover_switch(hass, "c1")
+    await async_setup_services(hass)
+
+    with pytest.raises(Unauthorized):
+        await hass.services.async_call(
+            DOMAIN,
+            "run_scenario",
+            {"scenario_id": "s1"},
+            blocking=True,
+            context=Context(user_id=hass_read_only_user.id),
+        )
+    with pytest.raises(Unauthorized):
+        await hass.services.async_call(
+            DOMAIN,
+            "set_cover_enabled",
+            {"cover_item_id": "c1", "enabled": False},
+            blocking=True,
+            context=Context(user_id=hass_read_only_user.id),
+        )
+    assert scheduler.runs == []
+    assert coordinator.data_model.covers["c1"].enabled is True
+
+    # A user who may control the covers, and a call without any user (an
+    # automation, a script), go through as before.
+    await hass.services.async_call(
+        DOMAIN,
+        "run_scenario",
+        {"scenario_id": "s1"},
+        blocking=True,
+        context=Context(user_id=hass_admin_user.id),
+    )
+    await hass.services.async_call(
+        DOMAIN, "run_scenario", {"scenario_id": "s1"}, blocking=True
+    )
+    assert scheduler.runs == [("s1", False), ("s1", False)]

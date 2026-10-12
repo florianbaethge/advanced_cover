@@ -29,7 +29,7 @@ type BoolKey = {
 const SECTION_KEYS: Record<CardSection, Array<keyof AdvancedCoverCardConfig>> = {
   next: ["next_actions", "show_last_run"],
   timeline: ["timeline_list", "timeline_legend"],
-  covers: ["covers", "group_by_area", "cover_controls"],
+  covers: ["covers", "group_by_area", "cover_controls", "cover_automation"],
   scenarios: ["scenarios"],
 };
 
@@ -340,6 +340,7 @@ export class AdvancedCoverCardEditor extends LitElement {
           )}
           ${this._toggleRow("card_ed_group_area", "group_by_area")}
           ${this._toggleRow("card_ed_controls", "cover_controls")}
+          ${this._toggleRow("card_ed_cover_auto", "cover_automation")}
         `;
       default:
         return html`

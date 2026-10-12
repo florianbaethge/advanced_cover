@@ -57,6 +57,18 @@ export const setEnabled = (
   entryId?: string
 ) => action(hass, entryId, { action: "set_enabled", enabled });
 
+export const setCoverEnabled = (
+  hass: HomeAssistant,
+  coverItemId: string,
+  enabled: boolean,
+  entryId?: string
+) =>
+  action(hass, entryId, {
+    action: "set_cover_enabled",
+    cover_item_id: coverItemId,
+    enabled,
+  });
+
 export const driveCover = (
   hass: HomeAssistant,
   coverItemId: string,

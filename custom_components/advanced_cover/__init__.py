@@ -165,10 +165,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok and entry.entry_id in hass.data.get(DOMAIN, {}):
         hass.data[DOMAIN].pop(entry.entry_id)
     if unload_ok:
-        from .card_api import async_release_subscribers
+        from .websocket import async_release_subscribers
 
-        # Open cards hang on the coordinator that just went away; tell them,
-        # so they subscribe again once the entry is back.
+        # Open panels and cards hang on the coordinator that just went away;
+        # tell them, so they subscribe again once the entry is back.
         async_release_subscribers(hass, entry.entry_id)
 
     if unload_ok and hass.data.get(PANEL_REGISTERED_KEY):
