@@ -7337,7 +7337,7 @@ class ViewToday extends i$2 {
 }
 defineCustomElementOnce("ac-view-today", ViewToday);
 
-const VERSION = "0.9.0";
+const VERSION = "0.10.0";
 const PANEL_PAGES = ["today", "covers", "scenarios", "log"];
 const TAB_LABEL_KEYS = {
     today: "config_panel.tab_today",
