@@ -352,3 +352,29 @@ def test_action_override_safety_override_inherits_and_wins():
     # A safety override alone keeps the override non-empty (survives from_dict).
     assert ActionOverride(safety_override="block").is_empty() is False
     assert Assignment.from_dict(overridden.to_dict()).action_override is not None
+
+
+def test_safety_delay_round_trip_clamps_and_inherits():
+    action = CoverAction.from_dict({"position": 0, "safety_delay_min": 5})
+    assert action.safety_delay_min == 5
+    assert CoverAction.from_dict(action.to_dict()).safety_delay_min == 5
+    assert CoverAction.from_dict({}).safety_delay_min is None
+    assert CoverAction.from_dict({"safety_delay_min": 999}).safety_delay_min == 120
+    assert CoverAction.from_dict({"safety_delay_min": -3}).safety_delay_min == 0
+    assert CoverAction.from_dict({"safety_delay_min": "x"}).safety_delay_min is None
+
+    default = CoverAction(position=0, safety_override="clamp", safety_delay_min=5)
+    plain = Assignment(cover_item_id="c1")
+    assert plain.resolved_action(default).safety_delay_min == 5
+    # An assignment can set its own wait, including 0 to switch it off.
+    for own in (0, 15):
+        override = Assignment(
+            cover_item_id="c1", action_override=ActionOverride(safety_delay_min=own)
+        )
+        assert override.resolved_action(default).safety_delay_min == own
+    # A delay-only override is not empty and survives the round trip.
+    restored = Assignment.from_dict(
+        {"cover_item_id": "c1", "action_override": {"safety_delay_min": 0}}
+    )
+    assert restored.action_override is not None
+    assert restored.action_override.safety_delay_min == 0

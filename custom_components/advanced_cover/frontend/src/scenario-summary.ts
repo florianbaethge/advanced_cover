@@ -214,6 +214,13 @@ export function summarizeThen(hass: Hass, s: Scenario): string {
   if (action.safety_override) {
     parts.push(t(hass, `config_panel.safety_override_${action.safety_override}`));
   }
+  if (action.safety_delay_min && action.safety_override !== "block") {
+    parts.push(
+      t(hass, "config_panel.scenarios_safety_delay_value", {
+        n: action.safety_delay_min,
+      })
+    );
+  }
   if (action.min_position_delta != null) {
     parts.push(
       `${t(hass, "config_panel.scenarios_opt_min_delta")} ${action.min_position_delta}%`

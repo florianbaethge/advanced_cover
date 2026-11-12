@@ -611,3 +611,247 @@ async def test_first_occurrence_on_another_day(hass: HomeAssistant, freezer) -> 
     assert scheduler.first_occurrence_on(tomorrow) is None
 
     await scheduler.async_shutdown()
+
+
+# --------------------------------------------------- open-window delay (hold)
+
+
+def make_delay_data(
+    *,
+    delay_min: int | None = 10,
+    override: str | None = "clamp",
+    retry_window_min: int = 0,
+) -> EntryData:
+    """One cover with a window contact; the scenario closes it fully."""
+    data = make_data(retry_window_min=retry_window_min)
+    cover = data.covers["c1"]
+    cover.contact_entity_id = "binary_sensor.window"
+    cover.contact_state_map = {"on": "open", "off": "closed"}
+    action = data.scenarios[0].action
+    action.position = 0
+    action.safety_override = override
+    action.safety_delay_min = delay_min
+    return data
+
+
+async def _fire_at(hass: HomeAssistant, freezer, when: str) -> None:
+    from homeassistant.util import dt as dt_util
+    from pytest_homeassistant_custom_component.common import async_fire_time_changed
+
+    freezer.move_to(when)
+    async_fire_time_changed(hass, dt_util.utcnow())
+    await hass.async_block_till_done()
+
+
+async def _start(
+    hass: HomeAssistant, freezer, data: EntryData, executor: StubExecutor
+) -> tuple[StubCoordinator, AdvancedCoverScheduler]:
+    await use_utc(hass)
+    freezer.move_to("2026-07-03 07:59:00+00:00")
+    hass.states.async_set("cover.test", "open", {"current_position": 100})
+    hass.states.async_set("binary_sensor.window", "on")
+    coordinator = StubCoordinator(data)
+    scheduler = AdvancedCoverScheduler(hass, coordinator, executor)
+    await scheduler.async_rebuild_plan()
+    await _fire_at(hass, freezer, "2026-07-03 08:00:30+00:00")
+    return coordinator, scheduler
+
+
+async def test_delay_waits_then_runs_the_clamped_move(
+    hass: HomeAssistant, freezer
+) -> None:
+    """Window stays open: nothing moves during the delay, then the clamp runs."""
+    executor = StubExecutor(ExecutionOutcome(RESULT_EXECUTED, "clamped", 20))
+    coordinator, scheduler = await _start(hass, freezer, make_delay_data(), executor)
+
+    run = coordinator.plan[0].runs["c1"]
+    assert run.status == RUN_STATE_ARMED
+    assert executor.calls == 0
+    assert run.rearm_entity_ids == {"binary_sensor.window"}
+    assert run.reason == (
+        "window open: waits until 08:10, then closes to the ventilation position"
+    )
+    assert run.to_dict()["hold_until"] is not None
+    assert coordinator.logs[-1]["result"] == "armed"
+
+    await _fire_at(hass, freezer, "2026-07-03 08:05:00+00:00")
+    assert executor.calls == 0
+
+    await _fire_at(hass, freezer, "2026-07-03 08:10:31+00:00")
+    run = coordinator.plan[0].runs["c1"]
+    assert executor.calls == 1
+    assert run.status == RUN_STATE_DONE
+    assert run.result == RESULT_EXECUTED
+    assert run.hold_until is None
+
+    await scheduler.async_shutdown()
+
+
+async def test_delay_window_shut_meanwhile_closes_right_away(
+    hass: HomeAssistant, freezer
+) -> None:
+    """Shutting the window during the delay runs the normal move at once."""
+    executor = StubExecutor(ExecutionOutcome(RESULT_EXECUTED, None, 0))
+    data = make_delay_data(override="ignore")
+    coordinator, scheduler = await _start(hass, freezer, data, executor)
+    assert coordinator.plan[0].runs["c1"].reason == (
+        "window open: waits until 08:10, then closes fully"
+    )
+
+    freezer.move_to("2026-07-03 08:03:00+00:00")
+    hass.states.async_set("binary_sensor.window", "off")
+    await hass.async_block_till_done()
+
+    run = coordinator.plan[0].runs["c1"]
+    assert executor.calls == 1
+    assert run.status == RUN_STATE_DONE
+    assert run.result == RESULT_EXECUTED
+
+    # The old delay end passes without a second move.
+    await _fire_at(hass, freezer, "2026-07-03 08:10:31+00:00")
+    assert executor.calls == 1
+
+    await scheduler.async_shutdown()
+
+
+async def test_delay_outlives_the_retry_window(hass: HomeAssistant, freezer) -> None:
+    """A delay longer than the retry window is not cut short by its expiry."""
+    executor = StubExecutor(ExecutionOutcome(RESULT_EXECUTED, "clamped", 20))
+    data = make_delay_data(delay_min=20, retry_window_min=5)
+    coordinator, scheduler = await _start(hass, freezer, data, executor)
+
+    await _fire_at(hass, freezer, "2026-07-03 08:06:00+00:00")
+    run = coordinator.plan[0].runs["c1"]
+    assert run.status == RUN_STATE_ARMED
+    assert executor.calls == 0
+
+    await _fire_at(hass, freezer, "2026-07-03 08:20:31+00:00")
+    run = coordinator.plan[0].runs["c1"]
+    assert executor.calls == 1
+    assert run.status == RUN_STATE_DONE
+
+    await scheduler.async_shutdown()
+
+
+async def test_no_delay_when_window_is_shut(hass: HomeAssistant, freezer) -> None:
+    """With the window shut the delay never starts."""
+    executor = StubExecutor(ExecutionOutcome(RESULT_EXECUTED, None, 0))
+    await use_utc(hass)
+    freezer.move_to("2026-07-03 07:59:00+00:00")
+    hass.states.async_set("cover.test", "open", {"current_position": 100})
+    hass.states.async_set("binary_sensor.window", "off")
+    coordinator = StubCoordinator(make_delay_data())
+    scheduler = AdvancedCoverScheduler(hass, coordinator, executor)
+    await scheduler.async_rebuild_plan()
+    await _fire_at(hass, freezer, "2026-07-03 08:00:30+00:00")
+
+    assert executor.calls == 1
+    assert coordinator.plan[0].runs["c1"].status == RUN_STATE_DONE
+
+    await scheduler.async_shutdown()
+
+
+async def test_block_mode_ignores_the_delay(hass: HomeAssistant, freezer) -> None:
+    """ "Keep position" already waits for the window: the executor decides at once."""
+    executor = StubExecutor(
+        ExecutionOutcome(RESULT_BLOCKED_SAFETY, "contact is open; blocked", 0)
+    )
+    data = make_delay_data(override="block")
+    coordinator, scheduler = await _start(hass, freezer, data, executor)
+
+    assert executor.calls == 1
+    assert coordinator.plan[0].runs["c1"].result == RESULT_BLOCKED_SAFETY
+
+    await scheduler.async_shutdown()
+
+
+async def test_delay_survives_a_config_save(hass: HomeAssistant, freezer) -> None:
+    """A plan rebuild during the delay keeps its end time instead of losing it."""
+    executor = StubExecutor(ExecutionOutcome(RESULT_EXECUTED, "clamped", 20))
+    coordinator, scheduler = await _start(hass, freezer, make_delay_data(), executor)
+    hold_until = coordinator.plan[0].runs["c1"].hold_until
+
+    freezer.move_to("2026-07-03 08:04:00+00:00")
+    await scheduler.async_rebuild_plan()
+    await hass.async_block_till_done()
+    run = coordinator.plan[0].runs["c1"]
+    assert run.status == RUN_STATE_ARMED
+    assert run.hold_until == hold_until
+    assert executor.calls == 0
+
+    await _fire_at(hass, freezer, "2026-07-03 08:10:31+00:00")
+    assert executor.calls == 1
+    assert coordinator.plan[0].runs["c1"].status == RUN_STATE_DONE
+
+    await scheduler.async_shutdown()
+
+
+async def test_delay_restored_after_restart(hass: HomeAssistant, freezer) -> None:
+    """The persisted delay continues after a restart."""
+    executor = StubExecutor(ExecutionOutcome(RESULT_EXECUTED, "clamped", 20))
+    await use_utc(hass)
+    freezer.move_to("2026-07-03 08:04:00+00:00")
+    hass.states.async_set("cover.test", "open", {"current_position": 100})
+    hass.states.async_set("binary_sensor.window", "on")
+    coordinator = StubCoordinator(make_delay_data())
+    coordinator.runtime_data = {
+        "date": "2026-07-03",
+        "fired": {"s1": True},
+        "runs": [],
+        "holds": [
+            {
+                "scenario_id": "s1",
+                "cover_item_id": "c1",
+                "until": "2026-07-03T08:10:00+00:00",
+                "done": False,
+            }
+        ],
+    }
+    scheduler = AdvancedCoverScheduler(hass, coordinator, executor)
+    await scheduler.async_rebuild_plan()
+    await hass.async_block_till_done()
+
+    run = coordinator.plan[0].runs["c1"]
+    assert run.status == RUN_STATE_ARMED
+    assert run.reason == (
+        "window open: waits until 08:10, then closes to the ventilation position"
+    )
+    assert executor.calls == 0
+
+    await _fire_at(hass, freezer, "2026-07-03 08:10:31+00:00")
+    assert executor.calls == 1
+
+    await scheduler.async_shutdown()
+
+
+async def test_newer_scenario_supersedes_a_running_delay(
+    hass: HomeAssistant, freezer
+) -> None:
+    """A later scenario that moves the cover ends the older delay."""
+    executor = StubExecutor(ExecutionOutcome(RESULT_EXECUTED, None, 0))
+    data = make_delay_data(delay_min=30)
+    night = Scenario(
+        id="s2",
+        name="Night",
+        trigger=Trigger(type="fixed_time", time_local="08:10"),
+        assignments=[Assignment(cover_item_id="c1")],
+    )
+    night.action.position = 0
+    night.action.safety_override = "ignore"
+    data.scenarios.append(night)
+    coordinator, scheduler = await _start(hass, freezer, data, executor)
+    assert coordinator.plan[0].runs["c1"].status == RUN_STATE_ARMED
+
+    await _fire_at(hass, freezer, "2026-07-03 08:10:30+00:00")
+    older = coordinator.plan[0].runs["c1"]
+    newer = coordinator.plan[1].runs["c1"]
+    assert older.status == RUN_STATE_DONE
+    assert older.reason == "superseded by scenario 'Night'"
+    assert newer.status == RUN_STATE_DONE
+    assert executor.calls == 1
+
+    # The older delay's end passes without moving the cover again.
+    await _fire_at(hass, freezer, "2026-07-03 08:30:31+00:00")
+    assert executor.calls == 1
+
+    await scheduler.async_shutdown()

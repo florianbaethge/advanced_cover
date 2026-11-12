@@ -153,6 +153,9 @@ SAFETY_MODE_CLAMP: Final = "clamp"
 SAFETY_MODE_IGNORE: Final = "ignore"
 SAFETY_MODES: Final = (SAFETY_MODE_BLOCK, SAFETY_MODE_CLAMP)
 SAFETY_OVERRIDE_MODES: Final = (*SAFETY_MODES, SAFETY_MODE_IGNORE)
+# Grace period before a clamped/ignored closing move runs with the window
+# open: gives someone who is airing the room time to shut the window first.
+MAX_SAFETY_DELAY_MIN: Final = 120
 
 # --- Per-assignment daily run states ---
 RUN_STATE_IDLE: Final = "idle"

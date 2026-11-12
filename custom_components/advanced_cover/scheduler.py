@@ -51,6 +51,8 @@ from .const import (
     RUN_STATE_DONE,
     RUN_STATE_EXPIRED,
     RUN_STATE_IDLE,
+    SAFETY_MODE_CLAMP,
+    SAFETY_MODE_IGNORE,
     SUN_ENTITY_ID,
     SUN_EVENT_SOLAR_NOON,
     TRIGGER_FIXED_TIME,
@@ -58,9 +60,9 @@ from .const import (
     TRIGGER_SUN_ELEVATION,
     WEEKDAYS,
 )
-from .engine import CoverContext, SunContext, evaluate_conditions
+from .engine import CoverContext, SunContext, evaluate_conditions, safety_would_block
 from .executor import CoverExecutor, ExecutionOutcome, current_cover_position
-from .models import Assignment, CoverItem, Scenario, Trigger
+from .models import Assignment, CoverAction, CoverItem, Scenario, Trigger
 from .sun_math import azimuth_crossing, elevation_crossing, make_angle_funcs
 
 if TYPE_CHECKING:
@@ -151,6 +153,13 @@ def compute_occurrence_times(
 # right after the earliest cover fires and the later covers could never run.
 RELATIVE_GRACE_MIN: Final = 15
 
+# How long after its end an open-window delay that a restart interrupted is
+# still caught up. A longer outage lets the run expire like any missed one.
+HOLD_CATCH_UP_GRACE_MIN: Final = 15
+
+# (hold_until, hold_done) of an open-window delay, keyed by (scenario, cover).
+HoldState = tuple[datetime | None, bool]
+
 
 def compute_relative_occurrence(
     scenario: Scenario,
@@ -225,6 +234,20 @@ def apply_carryover(
         occ.fired = True
 
 
+def apply_hold_carryover(
+    occ: Occurrence, prev_holds: dict[tuple[str, str], HoldState]
+) -> None:
+    """Continue running open-window delays on a freshly rebuilt occurrence.
+
+    After a config save or restart a delay goes on where it was instead of
+    starting over or being lost.
+    """
+    for run in occ.runs.values():
+        hold = prev_holds.get((occ.scenario_id, run.cover_item_id))
+        if hold is not None and not _is_terminal(run):
+            run.hold_until, run.hold_done = hold
+
+
 @dataclass
 class AssignmentRun:
     """Daily state of one (scenario, cover) assignment."""
@@ -250,6 +273,11 @@ class AssignmentRun:
     safety_clamped: bool = False
     clamped_result: str | None = None
     clamped_reason: str | None = None
+    # Open-window delay: the safety rule would clamp or ignore this closing
+    # move, so it waits until ``hold_until`` for the window to be shut.
+    # ``hold_done`` marks a delay that ran out — a run waits at most once.
+    hold_until: datetime | None = None
+    hold_done: bool = False
     rearm_entity_ids: set[str] = field(default_factory=set)
     unsub_listener: CALLBACK_TYPE | None = field(default=None, repr=False)
 
@@ -266,6 +294,7 @@ class AssignmentRun:
             "reason": self.reason,
             "armed_until": (self.armed_until.isoformat() if self.armed_until else None),
             "fire_at": (self.fire_at.isoformat() if self.fire_at else None),
+            "hold_until": (self.hold_until.isoformat() if self.hold_until else None),
             "waiting_for": sorted(self.rearm_entity_ids),
         }
 
@@ -359,15 +388,20 @@ class AdvancedCoverScheduler:
 
     def _persisted_carryover(
         self, today: date
-    ) -> tuple[dict[tuple[str, str], AssignmentRun], dict[str, bool]]:
+    ) -> tuple[
+        dict[tuple[str, str], AssignmentRun],
+        dict[str, bool],
+        dict[tuple[str, str], HoldState],
+    ]:
         """Rebuild carryover inputs from the persisted runtime snapshot.
 
-        Only terminal outcomes are restored (armed runs re-arm through the
-        normal catch-up path). A snapshot from another day yields nothing.
+        Only terminal outcomes and open-window delays are restored (armed runs
+        re-arm through the normal catch-up path). A snapshot from another day
+        yields nothing.
         """
         data = self.coordinator.runtime_data_for(today)
         if not data:
-            return {}, {}
+            return {}, {}, {}
         runs: dict[tuple[str, str], AssignmentRun] = {}
         for raw in data.get("runs") or []:
             if not isinstance(raw, dict):
@@ -387,7 +421,55 @@ class AdvancedCoverScheduler:
             if _is_terminal(stub):
                 runs[(scenario_id, cover_item_id)] = stub
         fired = {str(sid): bool(f) for sid, f in (data.get("fired") or {}).items()}
-        return runs, fired
+        holds: dict[tuple[str, str], HoldState] = {}
+        for raw in data.get("holds") or []:
+            if not isinstance(raw, dict):
+                continue
+            key = (
+                str(raw.get("scenario_id") or ""),
+                str(raw.get("cover_item_id") or ""),
+            )
+            if not all(key):
+                continue
+            until = dt_util.parse_datetime(str(raw.get("until") or ""))
+            holds[key] = (until, bool(raw.get("done")))
+        return runs, fired, holds
+
+    def _carryover_inputs(
+        self, today: date
+    ) -> tuple[
+        dict[tuple[str, str], AssignmentRun],
+        dict[str, bool],
+        dict[tuple[str, str], HoldState],
+    ]:
+        """Collect what a plan rebuild carries over: outcomes, fired, delays."""
+        if self._plan_date is None:
+            # First build after a restart: restore today's already-decided
+            # outcomes from the runtime store so the day's history survives
+            # and open retry windows can re-arm instead of expiring.
+            return self._persisted_carryover(today)
+        # Snapshot today's already-decided runs before tearing the plan
+        # down, so a mid-day config save does not wipe the outcome history.
+        # Outcomes never carry across days: at the midnight rollover (or a
+        # rebuild after a date change) the previous plan belongs to
+        # yesterday and every scenario must start fresh.
+        if self._plan_date != today:
+            return {}, {}, {}
+        return (
+            self._snapshot_terminal_runs(),
+            {occ.scenario_id: occ.fired for occ in self._plan},
+            self._snapshot_holds(),
+        )
+
+    def _snapshot_holds(self) -> dict[tuple[str, str], HoldState]:
+        """Capture the open-window delays of still-armed runs."""
+        return {
+            (occ.scenario_id, run.cover_item_id): (run.hold_until, run.hold_done)
+            for occ in self._plan
+            for run in occ.runs.values()
+            if run.status == RUN_STATE_ARMED
+            and (run.hold_until is not None or run.hold_done)
+        }
 
     def _snapshot_terminal_runs(self) -> dict[tuple[str, str], AssignmentRun]:
         """Capture runs that reached a final outcome, keyed by (scenario, cover).
@@ -515,21 +597,7 @@ class AdvancedCoverScheduler:
             self._cancel_timer()
             now = dt_util.now()
             today = now.date()
-            # Snapshot today's already-decided runs before tearing the plan
-            # down, so a mid-day config save does not wipe the outcome history.
-            # Outcomes never carry across days: at the midnight rollover (or a
-            # rebuild after a date change) the previous plan belongs to
-            # yesterday and every scenario must start fresh.
-            same_day = self._plan_date == today
-            prev_runs = self._snapshot_terminal_runs() if same_day else {}
-            prev_fired = (
-                {occ.scenario_id: occ.fired for occ in self._plan} if same_day else {}
-            )
-            if self._plan_date is None:
-                # First build after a restart: restore today's already-decided
-                # outcomes from the runtime store so the day's history survives
-                # and open retry windows can re-arm instead of expiring.
-                prev_runs, prev_fired = self._persisted_carryover(today)
+            prev_runs, prev_fired, prev_holds = self._carryover_inputs(today)
             self._teardown_plan()
 
             data = self.coordinator.data_model
@@ -608,6 +676,7 @@ class AdvancedCoverScheduler:
                 # Restore outcomes already decided earlier today, so a config
                 # save neither re-fires nor loses them.
                 apply_carryover(occ, prev_runs, prev_fired.get(scenario.id, False))
+                apply_hold_carryover(occ, prev_holds)
                 plan.append(occ)
 
             # Priority = scenario order in the panel; used for deterministic
@@ -633,10 +702,16 @@ class AdvancedCoverScheduler:
     def _catch_up_missed(plan: list[Occurrence], now: datetime) -> list[Occurrence]:
         """Split missed occurrences: due (open retry window) vs. expired."""
         due_now: list[Occurrence] = []
+        hold_grace = timedelta(minutes=HOLD_CATCH_UP_GRACE_MIN)
         for occ in plan:
             if occ.planned_at > now:
                 continue
-            if occ.retry_until and occ.retry_until > now:
+            holding = any(
+                run.hold_until is not None and run.hold_until + hold_grace > now
+                for run in occ.runs.values()
+                if not _is_terminal(run)
+            )
+            if (occ.retry_until and occ.retry_until > now) or holding:
                 due_now.append(occ)
             else:
                 occ.fired = True
@@ -671,15 +746,15 @@ class AdvancedCoverScheduler:
     # ---------------------------------------------------------------- timers
 
     def _pending_run_times(self, now: datetime) -> list[datetime]:
-        """Future per-cover fire times of armed runs (relative azimuth)."""
+        """Future per-cover times of armed runs: own fire time or delay end."""
         return [
-            run.fire_at
+            when
             for occ in self._plan
             if occ.fired
             for run in occ.runs.values()
             if run.status == RUN_STATE_ARMED
-            and run.fire_at is not None
-            and run.fire_at > now
+            for when in (run.fire_at, run.hold_until)
+            if when is not None and when > now
         ]
 
     async def _async_schedule_next_timer(self) -> None:
@@ -720,11 +795,14 @@ class AdvancedCoverScheduler:
                 if not occ.fired:
                     continue
                 for run in occ.runs.values():
-                    if (
-                        run.status == RUN_STATE_ARMED
-                        and run.fire_at is not None
-                        and run.fire_at <= now + timedelta(seconds=1)
-                    ):
+                    if run.status != RUN_STATE_ARMED:
+                        continue
+                    due = [
+                        when
+                        for when in (run.fire_at, run.hold_until)
+                        if when is not None and when <= now + timedelta(seconds=1)
+                    ]
+                    if due:
                         await self._async_evaluate_run(occ, run, first_fire=False)
 
     # ------------------------------------------------------------- execution
@@ -836,10 +914,14 @@ class AdvancedCoverScheduler:
         )
 
         if evaluation.passed:
+            action = assignment.resolved_action(scenario.action)
+            self._supersede_older_holds(occ, run)
+            if self._hold_for_open_window(
+                occ, run, cover, action, first_fire=first_fire
+            ):
+                return
             self._disarm(run)
-            outcome = await self.executor.async_execute(
-                cover, assignment.resolved_action(scenario.action)
-            )
+            outcome = await self.executor.async_execute(cover, action)
             if self._arm_for_retryable_outcome(
                 occ, run, cover, outcome, first_fire=first_fire
             ):
@@ -847,6 +929,8 @@ class AdvancedCoverScheduler:
             self._finish_run(occ, run, outcome.result, outcome.reason)
             return
 
+        # The delay only covers a move that is ready to run.
+        run.hold_until = None
         reason = "; ".join(evaluation.failed_reasons)
         now = dt_util.now()
         can_arm = (
@@ -868,6 +952,92 @@ class AdvancedCoverScheduler:
             return
 
         self._finish_run(occ, run, RESULT_SKIPPED, reason)
+
+    def _open_window_mode(self, cover: CoverItem, action: CoverAction) -> str | None:
+        """Safety mode that would act on this move right now, or ``None``.
+
+        ``None`` means the safety rule stays out of it: no contact sensor,
+        the window is shut, or the move does not close below the
+        ventilation position. Mirrors the executor's own check.
+        """
+        if not cover.contact_entity_id:
+            return None
+        ctx = self._cover_context(cover)
+        if not safety_would_block(
+            contact=ctx.contact,
+            block_when_tilted=cover.safety.block_when_tilted,
+            ventilation_position=cover.safety.ventilation_position,
+            target_position=action.position,
+            current_position=ctx.position,
+        ):
+            return None
+        return action.safety_override or cover.safety.mode
+
+    def _hold_for_open_window(
+        self,
+        occ: Occurrence,
+        run: AssignmentRun,
+        cover: CoverItem,
+        action: CoverAction,
+        *,
+        first_fire: bool,
+    ) -> bool:
+        """Delay a clamped/ignored closing move while the window is open.
+
+        Someone airing the room gets ``safety_delay_min`` minutes to shut the
+        window: shutting it closes the cover normally right away, otherwise
+        the move runs as configured once the delay is over. Returns whether
+        the run is (still) waiting.
+        """
+        delay = action.safety_delay_min or 0
+        mode = self._open_window_mode(cover, action) if delay > 0 else None
+        if (
+            run.hold_done
+            or cover.contact_entity_id is None
+            or mode not in (SAFETY_MODE_CLAMP, SAFETY_MODE_IGNORE)
+        ):
+            # Window shut, no delay, or "block" (which waits by itself).
+            run.hold_until = None
+            return False
+        now = dt_util.now()
+        started = run.hold_until is None
+        if run.hold_until is None:
+            run.hold_until = now + timedelta(minutes=delay)
+        elif now + timedelta(seconds=1) >= run.hold_until:
+            run.hold_until = None
+            run.hold_done = True
+            return False
+        until_local = dt_util.as_local(run.hold_until).strftime("%H:%M")
+        target = "to the ventilation position" if mode == SAFETY_MODE_CLAMP else "fully"
+        reason = f"window open: waits until {until_local}, then closes {target}"
+        self._arm_run(occ, run, {cover.contact_entity_id}, reason)
+        run.armed_until = run.hold_until
+        if started:
+            self._log_run(occ, run, RESULT_ARMED, reason)
+        return True
+
+    def _supersede_older_holds(self, occ: Occurrence, run: AssignmentRun) -> None:
+        """End older open-window delays once a newer scenario moves this cover.
+
+        Otherwise the older, delayed move would run after the newer one and
+        undo it.
+        """
+        for other in self._plan:
+            if other is occ:
+                break
+            older = other.runs.get(run.cover_item_id)
+            if (
+                older is not None
+                and older.status == RUN_STATE_ARMED
+                and older.hold_until is not None
+            ):
+                older.hold_until = None
+                self._finish_run(
+                    other,
+                    older,
+                    RESULT_SKIPPED,
+                    f"superseded by scenario '{occ.scenario_name}'",
+                )
 
     def _arm_for_retryable_outcome(
         self,
@@ -969,10 +1139,16 @@ class AdvancedCoverScheduler:
             if self._shutdown or run.status != RUN_STATE_ARMED:
                 return
             now = dt_util.now()
-            if occ.retry_until is None or now >= occ.retry_until:
+            if run.hold_until is None and (
+                occ.retry_until is None or now >= occ.retry_until
+            ):
                 self._expire_run(occ, run)
             else:
+                # An open-window delay outlives the retry window: the window
+                # being shut during it is exactly what it waits for.
                 await self._async_evaluate_run(occ, run, first_fire=False)
+        # The evaluation may have started a delay that needs its own timer.
+        await self._async_schedule_next_timer()
         self.coordinator.notify_plan_changed()
 
     def _disarm(self, run: AssignmentRun, *, keep_status: bool = False) -> None:
@@ -996,7 +1172,8 @@ class AdvancedCoverScheduler:
                 return
             async with self._lock:
                 for run in occ.runs.values():
-                    if run.status == RUN_STATE_ARMED:
+                    # A running open-window delay ends on its own timer.
+                    if run.status == RUN_STATE_ARMED and run.hold_until is None:
                         self._expire_run(occ, run)
             self.coordinator.notify_plan_changed()
 

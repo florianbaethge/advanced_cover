@@ -32,6 +32,19 @@ export function formatReason(
     return t(hass, "config_panel.reason_safety_clamped", {
       ventilation: m[1],
     });
+  m = reason.match(
+    /^window open: waits until (\d{2}:\d{2}), then closes (to the ventilation position|fully)$/
+  );
+  if (m)
+    return t(
+      hass,
+      m[2] === "fully"
+        ? "config_panel.reason_safety_delay_ignore"
+        : "config_panel.reason_safety_delay_clamp",
+      { time: m[1] }
+    );
+  m = reason.match(/^superseded by scenario '([\s\S]*)'$/);
+  if (m) return t(hass, "config_panel.reason_superseded", { scenario: m[1] });
   m = reason.match(/^(?:service|script) call failed: ([\s\S]*)$/);
   if (m) return t(hass, "config_panel.reason_service_failed", { error: m[1] });
   if (reason === "waiting for the sun to reach the facade direction")

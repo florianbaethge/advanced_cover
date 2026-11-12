@@ -31,6 +31,7 @@ from .const import (
     KINDS,
     MAX_RANDOM_WINDOW_MIN,
     MAX_RETRY_WINDOW_MIN,
+    MAX_SAFETY_DELAY_MIN,
     MODE_NORMAL,
     POSITION_OP_ABOVE,
     POSITION_OPS,
@@ -309,6 +310,10 @@ class CoverAction:
     # cover where it is, "clamp" → close down to the ventilation position,
     # "ignore" → close fully despite the open window (e.g. at night).
     safety_override: str | None = None
+    # Minutes to wait before a clamped/ignored move runs while the window is
+    # open; shutting the window in the meantime closes normally. None/0 → no
+    # delay. Has no effect in "block" mode, which waits for the window anyway.
+    safety_delay_min: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to JSON-compatible dict."""
@@ -318,6 +323,7 @@ class CoverAction:
             "mode": self.mode,
             "min_position_delta": self.min_position_delta,
             "safety_override": self.safety_override,
+            "safety_delay_min": self.safety_delay_min,
         }
 
     @staticmethod
@@ -331,6 +337,9 @@ class CoverAction:
             safety_override=_enum_opt(
                 data.get("safety_override"), SAFETY_OVERRIDE_MODES
             ),
+            safety_delay_min=_clamp_opt(
+                data.get("safety_delay_min"), 0, MAX_SAFETY_DELAY_MIN
+            ),
         )
 
 
@@ -343,6 +352,7 @@ class ActionOverride:
     mode: str | None = None
     min_position_delta: int | None = None
     safety_override: str | None = None
+    safety_delay_min: int | None = None
 
     def is_empty(self) -> bool:
         """Return True when nothing is overridden."""
@@ -352,6 +362,7 @@ class ActionOverride:
             and self.mode is None
             and self.min_position_delta is None
             and self.safety_override is None
+            and self.safety_delay_min is None
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -362,6 +373,7 @@ class ActionOverride:
             "mode": self.mode,
             "min_position_delta": self.min_position_delta,
             "safety_override": self.safety_override,
+            "safety_delay_min": self.safety_delay_min,
         }
 
     @staticmethod
@@ -375,6 +387,9 @@ class ActionOverride:
             min_position_delta=_clamp_opt(data.get("min_position_delta"), 0, 100),
             safety_override=_enum_opt(
                 data.get("safety_override"), SAFETY_OVERRIDE_MODES
+            ),
+            safety_delay_min=_clamp_opt(
+                data.get("safety_delay_min"), 0, MAX_SAFETY_DELAY_MIN
             ),
         )
 
@@ -409,6 +424,11 @@ class Assignment:
                 ov.safety_override
                 if ov.safety_override is not None
                 else default.safety_override
+            ),
+            safety_delay_min=(
+                ov.safety_delay_min
+                if ov.safety_delay_min is not None
+                else default.safety_delay_min
             ),
         )
 
