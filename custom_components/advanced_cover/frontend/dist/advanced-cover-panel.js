@@ -1416,6 +1416,14 @@ function formatReason(hass, reason) {
         return t(hass, "config_panel.reason_safety_clamped", {
             ventilation: m[1],
         });
+    m = reason.match(/^window open: waits until (\d{2}:\d{2}), then closes (to the ventilation position|fully)$/);
+    if (m)
+        return t(hass, m[2] === "fully"
+            ? "config_panel.reason_safety_delay_ignore"
+            : "config_panel.reason_safety_delay_clamp", { time: m[1] });
+    m = reason.match(/^superseded by scenario '([\s\S]*)'$/);
+    if (m)
+        return t(hass, "config_panel.reason_superseded", { scenario: m[1] });
     m = reason.match(/^(?:service|script) call failed: ([\s\S]*)$/);
     if (m)
         return t(hass, "config_panel.reason_service_failed", { error: m[1] });
@@ -3615,6 +3623,11 @@ function summarizeThen(hass, s) {
     if (action.safety_override) {
         parts.push(t(hass, `config_panel.safety_override_${action.safety_override}`));
     }
+    if (action.safety_delay_min && action.safety_override !== "block") {
+        parts.push(t(hass, "config_panel.scenarios_safety_delay_value", {
+            n: action.safety_delay_min,
+        }));
+    }
     if (action.min_position_delta != null) {
         parts.push(`${t(hass, "config_panel.scenarios_opt_min_delta")} ${action.min_position_delta}%`);
     }
@@ -3639,6 +3652,12 @@ function periodValue(hass, s) {
 const WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 const RANDOM_WINDOWS = [0, 15, 30, 60];
 const RETRY_WINDOWS = [0, 15, 30, 45, 60, 120, 240, 480];
+// Mirrors MAX_SAFETY_DELAY_MIN in const.py.
+const MAX_SAFETY_DELAY_MIN = 120;
+/** The open-window wait matters unless the move is blocked anyway. */
+function delayApplies(override) {
+    return override !== "block";
+}
 // Pre-filled for a newly added active period: April through September.
 const DEFAULT_PERIOD = { from: "04-01", to: "09-30" };
 const TRIGGER_TYPES = ["fixed_time", "sun_event", "sun_azimuth", "sun_elevation"];
@@ -3679,6 +3698,7 @@ function emptyScenario() {
             mode: "normal",
             min_position_delta: null,
             safety_override: null,
+            safety_delay_min: null,
         },
         assignments: [],
     };
@@ -3690,6 +3710,7 @@ function emptyOverride() {
         mode: null,
         min_position_delta: null,
         safety_override: null,
+        safety_delay_min: null,
     };
 }
 class ViewScenarios extends i$2 {
@@ -5352,8 +5373,17 @@ class ViewScenarios extends i$2 {
             {
                 id: "safety",
                 label: t(this.hass, "config_panel.scenarios_opt_safety"),
-                value: t(this.hass, `config_panel.safety_override_${action.safety_override ?? "inherit"}`),
-                set: action.safety_override != null,
+                value: [
+                    t(this.hass, `config_panel.safety_override_${action.safety_override ?? "inherit"}`),
+                    ...(delayApplies(action.safety_override) && action.safety_delay_min
+                        ? [
+                            t(this.hass, "config_panel.scenarios_safety_delay_value", {
+                                n: action.safety_delay_min,
+                            }),
+                        ]
+                        : []),
+                ].join(" · "),
+                set: action.safety_override != null || !!action.safety_delay_min,
                 render: () => this._renderSafetyField(draft),
             },
             {
@@ -5435,6 +5465,45 @@ class ViewScenarios extends i$2 {
       <p class="section-desc" style="margin-top:8px">
         ${t(this.hass, "config_panel.scenarios_safety_override_hint")}
       </p>
+      ${delayApplies(draft.action.safety_override)
+            ? this._renderDelayInput(draft.action.safety_delay_min ?? null, null, (value) => this._patch({
+                action: { ...draft.action, safety_delay_min: value },
+            }))
+            : A}
+    `;
+    }
+    /** Minutes input for the open-window wait. ``inherited`` is the scenario
+        value shown as placeholder in an assignment (null = scenario level). */
+    _renderDelayInput(value, inherited, onChange) {
+        return b `
+      <label class="field-label" style="margin-top:12px"
+        >${t(this.hass, "config_panel.scenarios_safety_delay")}</label
+      >
+      <span style="display:inline-flex;align-items:center;gap:6px">
+        <input
+          type="number"
+          min="0"
+          max=${MAX_SAFETY_DELAY_MIN}
+          step="1"
+          inputmode="numeric"
+          style="width:90px"
+          placeholder=${inherited != null ? String(inherited) : "0"}
+          .value=${value == null ? "" : String(value)}
+          @input=${(e) => {
+            const raw = e.target.value;
+            const num = Math.round(Number(raw));
+            onChange(raw === "" || !Number.isFinite(num)
+                ? null
+                : Math.max(0, Math.min(MAX_SAFETY_DELAY_MIN, num)));
+        }}
+        />
+        ${t(this.hass, "config_panel.scenarios_safety_delay_unit")}
+      </span>
+      ${inherited == null
+            ? b `<p class="section-desc" style="margin-top:8px">
+            ${t(this.hass, "config_panel.scenarios_safety_delay_hint")}
+          </p>`
+            : A}
     `;
     }
     _renderMinDeltaField(draft) {
@@ -5492,7 +5561,8 @@ class ViewScenarios extends i$2 {
         const hasOverride = ov.position != null ||
             ov.tilt_position != null ||
             ov.mode != null ||
-            ov.safety_override != null;
+            ov.safety_override != null ||
+            ov.safety_delay_min != null;
         return b `
       <div class="assignment-box">
         <div class="assignment-head">
@@ -5651,6 +5721,11 @@ class ViewScenarios extends i$2 {
                       ${t(this.hass, "config_panel.safety_override_ignore")}
                     </option>
                   </select>
+                  ${delayApplies(ov.safety_override ?? draft.action.safety_override)
+                ? this._renderDelayInput(ov.safety_delay_min ?? null, draft.action.safety_delay_min ?? 0, (value) => this._patchAssignment(index, {
+                    action_override: { ...ov, safety_delay_min: value },
+                }))
+                : A}
                 </div>`
             : A}
           </div>
@@ -7262,7 +7337,7 @@ class ViewToday extends i$2 {
 }
 defineCustomElementOnce("ac-view-today", ViewToday);
 
-const VERSION = "0.9.0";
+const VERSION = "0.10.0";
 const PANEL_PAGES = ["today", "covers", "scenarios", "log"];
 const TAB_LABEL_KEYS = {
     today: "config_panel.tab_today",

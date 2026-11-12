@@ -104,6 +104,9 @@ export interface CoverAction {
       null = the cover's own setting, "block" = stay put, "clamp" = close to
       the ventilation position, "ignore" = close fully despite the window. */
   safety_override: SafetyOverride | null;
+  /** Minutes a clamped/ignored closing move waits while the window is open;
+      shutting the window meanwhile closes normally. null/0 = no wait. */
+  safety_delay_min?: number | null;
 }
 
 export type SafetyOverride = "block" | "clamp" | "ignore";
@@ -114,6 +117,7 @@ export interface ActionOverride {
   mode: "normal" | "low" | null;
   min_position_delta: number | null;
   safety_override: SafetyOverride | null;
+  safety_delay_min?: number | null;
 }
 
 export interface Assignment {

@@ -238,14 +238,16 @@ def _assignment_preflight(
         if blocked:
             resolved = assignment.resolved_action(scenario.action)
             mode = resolved.safety_override or cover.safety.mode
+            delay = resolved.safety_delay_min or 0
             if mode == SAFETY_MODE_IGNORE:
                 # Override runs to the full target — informational only.
-                evals.append(safety_ignore_eval())
+                evals.append(safety_ignore_eval(delay_min=delay))
             elif mode == SAFETY_MODE_CLAMP:
                 # Clamp mode still runs — show what will happen, not a blocker.
                 evals.append(
                     safety_clamp_eval(
-                        ventilation_position=cover.safety.ventilation_position
+                        ventilation_position=cover.safety.ventilation_position,
+                        delay_min=delay,
                     )
                 )
             else:

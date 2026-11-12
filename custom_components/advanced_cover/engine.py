@@ -332,6 +332,8 @@ _SUM_SUN_POSITION = "config_panel.cond_sum_sun_position"
 _SUM_SAFETY = "config_panel.cond_sum_safety"
 _SUM_SAFETY_CLAMP = "config_panel.cond_sum_safety_clamp"
 _SUM_SAFETY_IGNORE = "config_panel.cond_sum_safety_ignore"
+_SUM_SAFETY_CLAMP_DELAYED = "config_panel.cond_sum_safety_clamp_delayed"
+_SUM_SAFETY_IGNORE_DELAYED = "config_panel.cond_sum_safety_ignore_delayed"
 _SUM_UNAVAILABLE = "config_panel.cond_sum_unavailable"
 _SUM_POSITION_UNKNOWN = "config_panel.cond_sum_position_unknown"
 _SUM_NO_CONTACT = "config_panel.cond_sum_no_contact"
@@ -628,11 +630,14 @@ def safety_condition_eval(*, blocked: bool, ventilation_position: int) -> Condit
     )
 
 
-def safety_clamp_eval(*, ventilation_position: int) -> ConditionEval:
+def safety_clamp_eval(
+    *, ventilation_position: int, delay_min: int = 0
+) -> ConditionEval:
     """Info line: the safety rule will clamp this move to the ventilation gap.
 
     ``ok=True`` on purpose — a clamped move still runs, it just stops at the
-    ventilation position instead of the scenario target.
+    ventilation position instead of the scenario target. With a delay it
+    first waits that long for the window to be shut.
     """
     return ConditionEval(
         scope=SCOPE_SAFETY,
@@ -640,15 +645,20 @@ def safety_clamp_eval(*, ventilation_position: int) -> ConditionEval:
         entity_id=None,
         ok=True,
         actual=None,
-        summary_key=_SUM_SAFETY_CLAMP,
-        summary_values={"ventilation": ventilation_position},
+        summary_key=_SUM_SAFETY_CLAMP_DELAYED if delay_min else _SUM_SAFETY_CLAMP,
+        summary_values=(
+            {"ventilation": ventilation_position, "minutes": delay_min}
+            if delay_min
+            else {"ventilation": ventilation_position}
+        ),
     )
 
 
-def safety_ignore_eval() -> ConditionEval:
+def safety_ignore_eval(*, delay_min: int = 0) -> ConditionEval:
     """Info line: the safety override closes fully despite the open window.
 
-    ``ok=True`` — the move runs to the full scenario target.
+    ``ok=True`` — the move runs to the full scenario target (after the
+    delay, if one is set).
     """
     return ConditionEval(
         scope=SCOPE_SAFETY,
@@ -656,6 +666,6 @@ def safety_ignore_eval() -> ConditionEval:
         entity_id=None,
         ok=True,
         actual=None,
-        summary_key=_SUM_SAFETY_IGNORE,
-        summary_values={},
+        summary_key=_SUM_SAFETY_IGNORE_DELAYED if delay_min else _SUM_SAFETY_IGNORE,
+        summary_values={"minutes": delay_min} if delay_min else {},
     )

@@ -21,6 +21,7 @@ from .const import (
     DOMAIN,
     EVENT_ACTION,
     EVENT_LOG_SIZE,
+    RUN_STATE_ARMED,
     RUN_STATE_DONE,
     RUN_STATE_EXPIRED,
 )
@@ -204,6 +205,21 @@ class AdvancedCoverCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     for occ in self.day_plan
                     for run in occ.runs.values()
                     if run.status in (RUN_STATE_DONE, RUN_STATE_EXPIRED)
+                ],
+                # Running open-window delays, so a restart continues them.
+                "holds": [
+                    {
+                        "scenario_id": occ.scenario_id,
+                        "cover_item_id": run.cover_item_id,
+                        "until": (
+                            run.hold_until.isoformat() if run.hold_until else None
+                        ),
+                        "done": run.hold_done,
+                    }
+                    for occ in self.day_plan
+                    for run in occ.runs.values()
+                    if run.status == RUN_STATE_ARMED
+                    and (run.hold_until is not None or run.hold_done)
                 ],
                 "log": list(self.action_log),
             }

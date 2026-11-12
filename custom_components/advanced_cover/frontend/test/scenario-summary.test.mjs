@@ -203,6 +203,28 @@ test("summarizeThen lists the target and every non-default option", () => {
   );
 });
 
+test("summarizeThen shows the open-window wait unless the move is blocked", () => {
+  const withDelay = (safety_override) =>
+    scenario({
+      action: {
+        position: 0,
+        tilt_position: null,
+        mode: "normal",
+        min_position_delta: null,
+        safety_override,
+        safety_delay_min: 5,
+      },
+    });
+  assert.equal(
+    summarizeThen(hass, withDelay("clamp")),
+    "→ 0% · Close to ventilation position · waits 5 min"
+  );
+  assert.equal(
+    summarizeThen(hass, withDelay("block")),
+    "→ 0% · Keep position (do not close)"
+  );
+});
+
 test("summarizeCovers truncates a long list", () => {
   assert.equal(summarizeCovers(hass, []), "No covers yet");
   assert.equal(summarizeCovers(hass, ["Kitchen", "Office"]), "Kitchen, Office");
