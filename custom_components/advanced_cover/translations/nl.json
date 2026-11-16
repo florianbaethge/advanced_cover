@@ -177,7 +177,7 @@
     "covers_cap_tilt": "Kanteling",
     "covers_cap_unavailable": "Entiteit niet beschikbaar",
     "covers_low_mode_title": "Lage / discrete modus (optioneel)",
-    "covers_low_mode_desc": "Alternatieve entiteit of script die wordt gebruikt wanneer een scenario-actie de modus \"laag\" heeft (bijv. een tweede, langzamere cover-entiteit). Het script ontvangt de doelpositie als variabele \"position\".",
+    "covers_low_mode_desc": "De lage modus wordt gebruikt wanneer een scenario-actie de modus \"laag\" heeft. Hij kan de normale cover-entiteit op haar langzame snelheid bewegen, een tweede, langzamere cover-entiteit gebruiken of een script uitvoeren. Het script ontvangt de doelpositie als variabele \"position\".",
     "covers_contact_title": "Raamcontact (optioneel)",
     "covers_contact_desc": "Binaire sensor of multi-state handvat sensor. Schakelt de contactvoorwaarde en de veiligheidsregel in.",
     "covers_contact_map_title": "Sensor status mapping",
@@ -369,7 +369,7 @@
     "help_today_statuses_title": "Wat betekenen de statussen?",
     "help_today_statuses_body": "Gepland: het trigger-moment ligt nog in de toekomst. Uitgevoerd: de cover werd verplaatst. Overgeslagen: voorwaarden werden niet voldaan of de beweging was onnodig (zie reden). Wachten: voorwaarden mislukten op trigger-moment — het scenario blijft de falende entiteiten monitoren tot het re-arm venster eindigt. Verlopen: het venster eindigde zonder succes. Geblokkeerd: de veiligheidsregel voorkwam sluiten omdat het raam open is. Niet beschikbaar: een vereiste entiteit ontbrak — voor veiligheid werd niets verplaatst.",
     "help_low_mode_title": "Wat als geen lage-modus doel is geconfigureerd?",
-    "help_low_mode_body": "Lage modus is een optioneel alternatief aandrijfpad (bijv. een langzamer, stiller motorprofiel). Als een scenario de modus \"Laag\" gebruikt maar deze cover heeft noch een lage-modus entiteit noch een script, voert de actie eenvoudigweg uit op de normale cover-entiteit — het mislukt nooit vanwege dit. Als beide zijn geconfigureerd, neemt het script voorrang en ontvangt de doelpositie als de variabele \"position\".",
+    "help_low_mode_body": "Lage modus is een optionele alternatieve manier om de cover aan te sturen, bijvoorbeeld een langzamer en stiller motorprofiel. Als een scenario de modus \"Laag\" gebruikt maar voor deze cover geen lage modus is ingesteld, wordt de actie gewoon op de normale cover-entiteit uitgevoerd. Daardoor mislukt ze nooit. De langzame snelheid van de cover-entiteit gaat voor een lage-modus-entiteit of script. Als zowel een entiteit als een script zijn ingesteld, gaat het script voor en ontvangt het de doelpositie als de variabele \"position\".",
     "help_contact_map_title": "Hoe werkt de state mapping?",
     "help_contact_map_body": "Intern kent de integratie alleen gesloten / gekanteld / open. Elke onbewerkte sensorstaat wordt via deze tabel vertaald. Niet-toegewezen staten tellen als \"onbekend\": contactvoorwaarden mislukken dan en de veiligheidsregel blijft inactief (failsafe — verplaats nooit \"voor alle zekerheid\"). Voor standaard binaire sensoren is uit → gesloten en aan → open voorgevuld.",
     "help_safety_title": "Wanneer activeren precies de veiligheidsregel?",
@@ -496,7 +496,7 @@
     "reason_cover_off": "Automatisering is voor deze cover uitgeschakeld",
     "reason_removed": "De cover of het scenario werd uit de configuratie verwijderd",
     "covers_manual_low": "Lage modus voor handmatige controle",
-    "covers_manual_low_desc": "De pijlknoppen en de test schuifregelaar bedienen de langzame-snelheid entiteit/script in plaats van de normale cover-entiteit. Stop gebruikt altijd de normale entiteit.",
+    "covers_manual_low_desc": "De pijlknoppen en de testschuifregelaar gebruiken de lage modus in plaats van de normale snelheid. Stop gaat altijd zonder snelheid naar de normale cover-entiteit.",
     "covers_manual_low_active": "Handmatige controle gebruikt lage modus",
     "card_state_active": "Actief",
     "card_state_off": "Uit",
@@ -593,6 +593,13 @@
     "card_ed_entry_gone": "{id} (bestaat niet meer)",
     "card_cover_auto": "Automatisering voor {name}",
     "card_ed_cover_auto": "Automatisering per cover schakelbaar",
-    "card_tomorrow": "Morgen {time} · {name}"
+    "card_tomorrow": "Morgen {time} · {name}",
+    "covers_cap_slow_speed": "Langzame snelheid",
+    "covers_low_speed": "De langzame snelheid van de cover-entiteit gebruiken",
+    "covers_low_speed_desc": "De lage modus beweegt de normale cover-entiteit met de snelheid \"slow\". Een aparte lage-modus-entiteit of een script is dan niet nodig. Dit vereist Home Assistant 2026.11 of nieuwer en een integratie die een langzame snelheid biedt, zoals Overkiz.",
+    "covers_low_speed_unsupported": "Deze cover-entiteit biedt op dit moment geen langzame snelheid. De lage modus beweegt de cover dan op normale snelheid.",
+    "covers_low_speed_migrate": "Deze cover-entiteit biedt nu zelf een langzame snelheid. Aparte langzame-snelheid-entiteiten van Overkiz zijn verouderd en werken niet meer vanaf Home Assistant 2027.5. Schakel in plaats daarvan over op de langzame snelheid van de cover-entiteit.",
+    "covers_low_speed_migrate_button": "Overschakelen op de langzame snelheid",
+    "reason_slow_speed_fallback": "{entity} biedt geen langzame snelheid, daarom bewoog de cover op normale snelheid."
   }
 }

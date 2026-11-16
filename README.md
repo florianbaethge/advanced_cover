@@ -22,6 +22,7 @@ Rule-based, scenario-driven automation for covers (shutters, venetian blinds, aw
 ## Contents
 
 - [How it works](#how-it-works)
+- [Low mode](#low-mode)
 - [The panel](#the-panel)
 - [Dashboard card](#dashboard-card)
 - [Installation](#installation)
@@ -36,12 +37,34 @@ Rule-based, scenario-driven automation for covers (shutters, venetian blinds, aw
 
 You build two things in the panel — **covers** and **scenarios** — and Advanced Cover turns them into a deterministic daily plan.
 
-- **A cover** links one of your existing cover entities and adds what automation needs: its **facing** (azimuth, for sun-protection logic), an optional **window / contact sensor** with a built-in safety rule, an optional **low / discreet drive** (a slower, quieter motor path or a script), plus automatic capability detection (position / tilt / open-close only).
+- **A cover** links one of your existing cover entities and adds what automation needs: its **facing** (azimuth, for sun-protection logic), an optional **window / contact sensor** with a built-in safety rule, an optional **low / discreet drive** (the cover's own slow speed, a second, slower cover entity, or a script), plus automatic capability detection (position / tilt / open-close only).
 - **A scenario** is one rule: a **trigger** at a fixed time or relative to the sun (sunrise / sunset / solar noon, ± offset, optional random window), limited to chosen **weekdays** and optional **times of year** (e.g. 1 Apr – 15 Oct, several periods, also across New Year), optional **"only if" conditions**, a **target** position and tilt, and the **covers** it applies to — each cover with optional extra conditions and overrides.
 
 Advanced Cover brings no sensors of its own — no weather service, no presence detection, no lux. It **orchestrates the cover entities you already have**, driven by signals from helpers you already trust (a weather `input_select`, a presence `input_boolean`, a lux threshold sensor). Conditions are evaluated against the *current* state at trigger time. The one deliberate exception is the **re-arm window**: a scenario that just missed its conditions stays **armed** and re-checks whenever a failing entity changes — event-driven, no polling, at most once per day.
 
 More on conditions and the design principles behind all this: [Concepts](https://github.com/florianbaethge/advanced_cover/blob/main/docs/concepts.md).
+
+## Low mode
+
+A scenario action with the mode **Low** moves the cover the quiet way. Per cover you choose how:
+
+| Kind | Setting in the cover editor | What Advanced Cover calls |
+|---|---|---|
+| **Speed option** | *Use the slow speed of the cover entity* | `cover.set_cover_position` / `open_cover` / `close_cover` on the normal cover entity with `speed: slow` |
+| **Low-mode entity** | *Low-mode cover entity* | The same services on a second cover entity, for example a separate low-speed entity |
+| **Script** | *Low-mode script* | The script, with the target position as the variable `position` |
+
+The speed option uses the cover speed that Home Assistant 2026.11 added to the cover platform. It is only offered when the selected cover entity supports it: the speed feature is set and `slow` is listed in its `supported_speeds` attribute. If the entity does not support the slow speed at the time of a move (for example after a downgrade of Home Assistant), the cover moves at normal speed and the log says so; the move never fails because of it. Stop is always sent to the normal entity without a speed. The speed option takes precedence over a low-mode entity or script. If both an entity and a script are configured, the script wins. The switch *Low mode for manual control* makes the panel's test buttons and the dashboard card use low mode as well.
+
+### Overkiz (Somfy io): moving off the `*_low_speed` entities
+
+Since Home Assistant 2026.11 the Overkiz integration offers the slow speed on the main cover entity and deprecates the separate `cover.<name>_low_speed` entities. They stop working in Home Assistant 2027.5. To switch a cover over:
+
+1. Update Home Assistant to 2026.11 or newer and Advanced Cover to 0.11.0 or newer.
+2. Open the cover in the **Covers** tab. When its low-mode entity ends in `_low_speed` and the main entity supports the slow speed, the editor shows a hint with the button **Switch to the slow speed**.
+3. Press it and save. This turns on the speed option and removes the old low-mode entity from the cover.
+
+Scenarios stay as they are: their mode **Low** now uses the slow speed of the main entity. Automations of your own that call the `_low_speed` entities need the same change (`speed: slow` on the main entity).
 
 ## The panel
 

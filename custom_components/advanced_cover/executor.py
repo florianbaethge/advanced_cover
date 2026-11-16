@@ -33,8 +33,12 @@ from .capabilities import (
     resolve_contact_state,
 )
 from .const import (
+    ATTR_SPEED,
     CONTACT_OPEN,
     CONTACT_TILTED,
+    LOW_MODE_ENTITY,
+    LOW_MODE_SCRIPT,
+    LOW_MODE_SPEED,
     MODE_LOW,
     RESULT_BLOCKED_SAFETY,
     RESULT_EXECUTED,
@@ -43,6 +47,7 @@ from .const import (
     SAFETY_MODE_CLAMP,
     SAFETY_MODE_IGNORE,
     SCRIPT_DOMAIN,
+    SPEED_SLOW,
 )
 from .models import CoverAction, CoverItem
 
@@ -156,9 +161,7 @@ class CoverExecutor:
         self, cover: CoverItem, action: CoverAction
     ) -> ExecutionOutcome:
         """Drive the cover to the action's target, honoring all guards."""
-        use_low_mode = action.mode == MODE_LOW and (
-            cover.low_mode_entity_id or cover.low_mode_script_id
-        )
+        low_kind = cover.low_mode_kind if action.mode == MODE_LOW else None
 
         target_position, block_reason, clamped = self._apply_safety(cover, action)
         if block_reason is not None or target_position is None:
@@ -174,14 +177,14 @@ class CoverExecutor:
             else None
         )
 
-        if use_low_mode and cover.low_mode_script_id:
+        if low_kind == LOW_MODE_SCRIPT:
             return await self._async_run_low_mode_script(
                 cover, target_position, clamp_note=clamp_note, clamped=clamped
             )
 
         entity_id = (
             cover.low_mode_entity_id
-            if use_low_mode and cover.low_mode_entity_id
+            if low_kind == LOW_MODE_ENTITY and cover.low_mode_entity_id
             else cover.cover_entity_id
         )
         state = self.hass.states.get(entity_id)
@@ -195,6 +198,24 @@ class CoverExecutor:
             )
 
         caps = capabilities_from_state(state)
+        speed: str | None = None
+        speed_note: str | None = None
+        if low_kind == LOW_MODE_SPEED:
+            if caps.supports_slow_speed:
+                speed = SPEED_SLOW
+            else:
+                speed_note = (
+                    f"{entity_id} does not support the slow speed, "
+                    "moved at normal speed"
+                )
+                _LOGGER.warning(
+                    "Low mode for %s: %s does not support speed %r, "
+                    "moving at normal speed",
+                    cover.name,
+                    entity_id,
+                    SPEED_SLOW,
+                )
+        note = "; ".join(n for n in (clamp_note, speed_note) if n) or None
         current = current_cover_position(state)
         delta = (
             action.min_position_delta
@@ -223,7 +244,7 @@ class CoverExecutor:
 
         try:
             if position_changed:
-                await self._async_move(entity_id, caps, target_position)
+                await self._async_move(entity_id, caps, target_position, speed=speed)
             if tilt_changed and action.tilt_position is not None:
                 await self.hass.services.async_call(
                     COVER_DOMAIN,
@@ -243,18 +264,24 @@ class CoverExecutor:
             )
 
         return ExecutionOutcome(
-            RESULT_EXECUTED, clamp_note, target_position, safety_clamped=clamped
+            RESULT_EXECUTED, note, target_position, safety_clamped=clamped
         )
 
     async def _async_move(
-        self, entity_id: str, caps: CoverCapabilities, position: int
+        self,
+        entity_id: str,
+        caps: CoverCapabilities,
+        position: int,
+        *,
+        speed: str | None = None,
     ) -> None:
         """Move the cover: set_position if supported, else open/close."""
+        extra = {ATTR_SPEED: speed} if speed else {}
         if caps.supports_position:
             await self.hass.services.async_call(
                 COVER_DOMAIN,
                 SERVICE_SET_COVER_POSITION,
-                {ATTR_ENTITY_ID: entity_id, ATTR_POSITION: position},
+                {ATTR_ENTITY_ID: entity_id, ATTR_POSITION: position, **extra},
                 blocking=True,
             )
             return
@@ -263,7 +290,7 @@ class CoverExecutor:
         await self.hass.services.async_call(
             COVER_DOMAIN,
             service,
-            {ATTR_ENTITY_ID: entity_id},
+            {ATTR_ENTITY_ID: entity_id, **extra},
             blocking=True,
         )
 

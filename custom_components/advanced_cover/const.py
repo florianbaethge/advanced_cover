@@ -139,6 +139,19 @@ MODE_NORMAL: Final = "normal"
 MODE_LOW: Final = "low"
 ACTION_MODES: Final = (MODE_NORMAL, MODE_LOW)
 
+# --- Cover speed (HA 2026.11+) ---
+# Plain values instead of CoverEntityFeature.SPEED / CoverSpeed, so older
+# Home Assistant versions (hacs.json allows 2025.1) still import this module.
+COVER_FEATURE_SPEED: Final = 256
+ATTR_SPEED: Final = "speed"
+ATTR_SUPPORTED_SPEEDS: Final = "supported_speeds"
+SPEED_SLOW: Final = "slow"
+
+# --- Low mode kinds (derived from the cover item's fields) ---
+LOW_MODE_SPEED: Final = "speed"
+LOW_MODE_SCRIPT: Final = "script"
+LOW_MODE_ENTITY: Final = "entity"
+
 DEFAULT_MIN_POSITION_DELTA: Final = 3
 DEFAULT_RETRY_WINDOW_MIN: Final = 0
 # Safety rule: with an open window contact, closing moves below this position

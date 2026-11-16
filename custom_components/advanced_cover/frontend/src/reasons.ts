@@ -11,6 +11,17 @@ export function formatReason(
   reason: string | null | undefined
 ): string | null {
   if (!reason) return null;
+  // Low mode "speed option" fallback, alone or after another reason.
+  const slow = reason.match(
+    /^(?:([\s\S]*); )?(\S+) does not support the slow speed, moved at normal speed$/
+  );
+  if (slow) {
+    const text = t(hass, "config_panel.reason_slow_speed_fallback", {
+      entity: slow[2],
+    });
+    const before = slow[1] ? formatReason(hass, slow[1]) : null;
+    return before ? `${before} ${text}` : text;
+  }
   let m = reason.match(/^(\S+) is unavailable$/);
   if (m)
     return t(hass, "config_panel.reason_entity_unavailable", { entity: m[1] });

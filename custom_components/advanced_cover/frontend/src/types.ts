@@ -159,6 +159,8 @@ export interface CoverCapabilities {
   supports_position: boolean;
   supports_tilt: boolean;
   supports_open_close: boolean;
+  /** Takes `speed: slow` on open/close/set_position (HA 2026.11+). */
+  supports_slow_speed?: boolean;
   available: boolean;
 }
 
@@ -171,6 +173,8 @@ export interface CoverItem {
   azimuth: number | null;
   low_mode_entity_id: string | null;
   low_mode_script_id: string | null;
+  /** Low mode drives the normal cover entity with `speed: slow`. */
+  low_mode_speed: boolean;
   manual_low_mode: boolean;
   contact_entity_id: string | null;
   contact_state_map: Record<string, string>;

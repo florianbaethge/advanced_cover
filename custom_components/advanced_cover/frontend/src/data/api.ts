@@ -75,6 +75,7 @@ export const probeCover = (
     supports_position: boolean;
     supports_tilt: boolean;
     supports_open_close: boolean;
+    supports_slow_speed?: boolean;
     available: boolean;
   };
   suggested_kind: string;

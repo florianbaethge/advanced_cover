@@ -13,16 +13,19 @@ from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UN
 from homeassistant.core import HomeAssistant, State
 
 from .const import (
+    ATTR_SUPPORTED_SPEEDS,
     CONTACT_CLOSED,
     CONTACT_OPEN,
     CONTACT_TILTED,
     CONTACT_UNKNOWN,
+    COVER_FEATURE_SPEED,
     KIND_AWNING,
     KIND_BLIND,
     KIND_CURTAIN,
     KIND_OTHER,
     KIND_SHADE,
     KIND_SHUTTER,
+    SPEED_SLOW,
 )
 
 # device_class → default kind (presentation default only, user can override).
@@ -57,6 +60,8 @@ class CoverCapabilities:
     supports_position: bool = False
     supports_tilt: bool = False
     supports_open_close: bool = False
+    # The entity takes ``speed: slow`` on open/close/set_position (HA 2026.11+).
+    supports_slow_speed: bool = False
     available: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -65,21 +70,46 @@ class CoverCapabilities:
             "supports_position": self.supports_position,
             "supports_tilt": self.supports_tilt,
             "supports_open_close": self.supports_open_close,
+            "supports_slow_speed": self.supports_slow_speed,
             "available": self.available,
         }
+
+
+def _feature_bits(state: State) -> int:
+    """Raw ``supported_features`` bits; garbage counts as none."""
+    try:
+        return int(state.attributes.get("supported_features", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def supports_slow_speed(state: State | None) -> bool:
+    """Whether the cover entity accepts ``speed: slow`` on its move services.
+
+    Needs both the speed feature bit and "slow" among ``supported_speeds``.
+    """
+    if state is None or state.state == STATE_UNAVAILABLE:
+        return False
+    if not _feature_bits(state) & COVER_FEATURE_SPEED:
+        return False
+    speeds = state.attributes.get(ATTR_SUPPORTED_SPEEDS)
+    if not isinstance(speeds, (list, tuple, set)):
+        return False
+    return SPEED_SLOW in speeds
 
 
 def capabilities_from_state(state: State | None) -> CoverCapabilities:
     """Derive capabilities from a cover state object."""
     if state is None or state.state == STATE_UNAVAILABLE:
         return CoverCapabilities()
-    features = CoverEntityFeature(state.attributes.get("supported_features", 0) or 0)
+    features = CoverEntityFeature(_feature_bits(state))
     return CoverCapabilities(
         supports_position=CoverEntityFeature.SET_POSITION in features,
         supports_tilt=CoverEntityFeature.SET_TILT_POSITION in features,
         supports_open_close=(
             CoverEntityFeature.OPEN in features or CoverEntityFeature.CLOSE in features
         ),
+        supports_slow_speed=supports_slow_speed(state),
         available=True,
     )
 

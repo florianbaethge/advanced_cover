@@ -291,6 +291,126 @@ def test_low_mode_script_receives_position(loop):
     assert hass.services.calls == [("script", "low_move", {"position": 30})]
 
 
+# -------------------------------------------------------- low mode: speed
+
+SPEED = 256  # CoverEntityFeature.SPEED (HA 2026.11+)
+
+
+def _speed_hass(features: int, speeds: list[str] | None, position: int = 80):
+    attrs: dict = {"supported_features": features, "current_position": position}
+    if speeds is not None:
+        attrs["supported_speeds"] = speeds
+    return FakeHass({"cover.test": State("cover.test", "open", attrs)})
+
+
+def test_low_mode_speed_sends_slow_with_set_position(loop):
+    hass = _speed_hass(POS | SPEED, ["fast", "slow"])
+    executor = CoverExecutor(hass, 3)
+    cover = make_cover(low_mode_speed=True)
+    outcome = loop.run_until_complete(
+        executor.async_execute(cover, CoverAction(position=30, mode="low"))
+    )
+    assert outcome.result == "executed"
+    assert outcome.reason is None
+    assert hass.services.calls == [
+        (
+            "cover",
+            "set_cover_position",
+            {"entity_id": "cover.test", "position": 30, "speed": "slow"},
+        )
+    ]
+
+
+def test_low_mode_speed_sends_slow_with_open_close(loop):
+    hass = _speed_hass(OPEN_CLOSE | SPEED, ["slow"], position=100)
+    executor = CoverExecutor(hass, 3)
+    cover = make_cover(low_mode_speed=True)
+    loop.run_until_complete(
+        executor.async_execute(cover, CoverAction(position=0, mode="low"))
+    )
+    assert hass.services.calls == [
+        ("cover", "close_cover", {"entity_id": "cover.test", "speed": "slow"})
+    ]
+
+
+def test_low_mode_speed_wins_over_low_entity_and_script(loop):
+    hass = _speed_hass(POS | SPEED, ["fast", "slow"])
+    executor = CoverExecutor(hass, 3)
+    cover = make_cover(
+        low_mode_speed=True,
+        low_mode_entity_id="cover.test_low_speed",
+        low_mode_script_id="script.low_move",
+    )
+    loop.run_until_complete(
+        executor.async_execute(cover, CoverAction(position=30, mode="low"))
+    )
+    assert [c[2]["entity_id"] for c in hass.services.calls] == ["cover.test"]
+    assert hass.services.calls[0][2]["speed"] == "slow"
+
+
+def test_normal_mode_on_speed_cover_sends_no_speed(loop):
+    hass = _speed_hass(POS | SPEED, ["fast", "slow"])
+    executor = CoverExecutor(hass, 3)
+    cover = make_cover(low_mode_speed=True)
+    loop.run_until_complete(executor.async_execute(cover, CoverAction(position=30)))
+    assert "speed" not in hass.services.calls[0][2]
+
+
+@pytest.mark.parametrize(
+    ("features", "speeds"),
+    [
+        (POS, None),  # pre-2026.11 entity: no speed at all
+        (POS, ["fast", "slow"]),  # speeds listed but feature bit missing
+        (POS | SPEED, ["fast"]),  # speed feature without "slow"
+        (POS | SPEED, None),
+    ],
+)
+def test_low_mode_speed_falls_back_when_unsupported(loop, features, speeds):
+    hass = _speed_hass(features, speeds)
+    executor = CoverExecutor(hass, 3)
+    cover = make_cover(low_mode_speed=True)
+    outcome = loop.run_until_complete(
+        executor.async_execute(cover, CoverAction(position=30, mode="low"))
+    )
+    assert outcome.result == "executed"
+    assert outcome.reason == (
+        "cover.test does not support the slow speed, moved at normal speed"
+    )
+    assert hass.services.calls == [
+        ("cover", "set_cover_position", {"entity_id": "cover.test", "position": 30})
+    ]
+
+
+def test_low_mode_speed_tilt_stays_plain(loop):
+    hass = FakeHass(
+        {
+            "cover.test": State(
+                "cover.test",
+                "open",
+                {
+                    "supported_features": POS | 128 | SPEED,
+                    "supported_speeds": ["slow"],
+                    "current_position": 80,
+                    "current_tilt_position": 0,
+                },
+            )
+        }
+    )
+    executor = CoverExecutor(hass, 3)
+    cover = make_cover(low_mode_speed=True)
+    loop.run_until_complete(
+        executor.async_execute(
+            cover, CoverAction(position=30, tilt_position=50, mode="low")
+        )
+    )
+    assert hass.services.calls[0][2]["speed"] == "slow"
+    assert hass.services.calls[1] == (
+        "cover",
+        "set_cover_tilt_position",
+        {"entity_id": "cover.test", "tilt_position": 50},
+    )
+
+
 def test_unavailable_cover_is_reported(loop):
     hass = FakeHass({"cover.test": State("cover.test", "unavailable", {})})
     executor = CoverExecutor(hass, 3)

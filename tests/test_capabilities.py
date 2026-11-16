@@ -31,6 +31,19 @@ def test_capabilities_open_close_only():
     assert caps.supports_open_close
 
 
+def test_capabilities_slow_speed():
+    def caps(features, **attrs):
+        return capabilities_from_state(
+            State("cover.x", "open", {"supported_features": features, **attrs})
+        )
+
+    assert caps(1 | 2 | 4 | 256, supported_speeds=["fast", "slow"]).supports_slow_speed
+    assert not caps(1 | 2 | 4 | 256, supported_speeds=["fast"]).supports_slow_speed
+    assert not caps(1 | 2 | 4, supported_speeds=["slow"]).supports_slow_speed
+    assert not caps(1 | 2 | 4 | 256).supports_slow_speed
+    assert not caps(1 | 2 | 4 | 256, supported_speeds="slow").supports_slow_speed
+
+
 def test_capabilities_unavailable():
     assert not capabilities_from_state(None).available
     state = State("cover.x", "unavailable", {})

@@ -378,3 +378,24 @@ def test_safety_delay_round_trip_clamps_and_inherits():
     )
     assert restored.action_override is not None
     assert restored.action_override.safety_delay_min == 0
+
+
+def test_cover_low_mode_speed_round_trip_and_old_configs():
+    cover = CoverItem(
+        id="c1", name="Bath", cover_entity_id="cover.bath", low_mode_speed=True
+    )
+    restored = CoverItem.from_dict(cover.to_dict())
+    assert restored.low_mode_speed is True
+    assert restored.low_mode_kind == "speed"
+    # A config stored before 0.11.0 has no low_mode_speed key.
+    old = CoverItem.from_dict(
+        {
+            "id": "c2",
+            "name": "Hall",
+            "cover_entity_id": "cover.hall",
+            "low_mode_entity_id": "cover.hall_low_speed",
+        }
+    )
+    assert old.low_mode_speed is False
+    assert old.low_mode_kind == "entity"
+    assert CoverItem(id="c3", name="x", cover_entity_id="cover.x").low_mode_kind is None

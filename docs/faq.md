@@ -2,8 +2,8 @@
 
 [← Back to the README](../README.md)
 
-**What happens when a scenario uses mode "Low" but the cover has no low-mode entity/script?**
-The action simply runs on the normal cover entity — it never fails because of the mode. If both entity and script are configured, the script wins and receives the target position as variable `position`.
+**What happens when a scenario uses mode "Low" but the cover has no low mode configured?**
+The action simply runs on the normal cover entity — it never fails because of the mode. The speed option (*Use the slow speed of the cover entity*) takes precedence over a low-mode entity or script. If both entity and script are configured, the script wins and receives the target position as variable `position`. With the speed option on an entity that does not offer the slow speed, the cover moves at normal speed and the log says so. See [Low mode](../README.md#low-mode).
 
 **Two scenarios hit the same cover in the same minute — who wins?**
 They execute in panel list order (top first); the last executed action determines the final position. The conflict is logged.
