@@ -1397,6 +1397,15 @@ function formatState(hass, entityId, state) {
 function formatReason(hass, reason) {
     if (!reason)
         return null;
+    // Low mode "speed option" fallback, alone or after another reason.
+    const slow = reason.match(/^(?:([\s\S]*); )?(\S+) does not support the slow speed, moved at normal speed$/);
+    if (slow) {
+        const text = t(hass, "config_panel.reason_slow_speed_fallback", {
+            entity: slow[2],
+        });
+        const before = slow[1] ? formatReason(hass, slow[1]) : null;
+        return before ? `${before} ${text}` : text;
+    }
     let m = reason.match(/^(\S+) is unavailable$/);
     if (m)
         return t(hass, "config_panel.reason_entity_unavailable", { entity: m[1] });
@@ -1503,6 +1512,15 @@ const CONTACT_ICONS = {
     open: "mdi:window-open-variant",
     unknown: "mdi:help-circle-outline",
 };
+/** Whether any kind of low mode is configured on the cover. */
+function hasLowMode(c) {
+    return Boolean(c.low_mode_speed || c.low_mode_entity_id || c.low_mode_script_id);
+}
+/** Overkiz's separate `cover.*_low_speed` entities are deprecated since
+    HA 2026.11 (removed in 2027.5); the main entity takes `speed: slow`. */
+function looksLikeDeprecatedLowSpeedEntity(entityId) {
+    return Boolean(entityId && /^cover\..+_low_speed$/.test(entityId));
+}
 function emptyDraft() {
     return {
         id: "",
@@ -1513,6 +1531,7 @@ function emptyDraft() {
         azimuth: null,
         low_mode_entity_id: null,
         low_mode_script_id: null,
+        low_mode_speed: false,
         manual_low_mode: false,
         contact_entity_id: null,
         contact_state_map: {},
@@ -1753,6 +1772,24 @@ class ViewCovers extends i$2 {
       }
       .manual-low.dialog-row ha-icon {
         margin-top: 2px;
+      }
+      .low-speed-hint {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin: 8px 0;
+        padding: 8px 10px;
+        border-radius: 8px;
+        font-size: 0.85rem;
+        background: color-mix(in srgb, var(--primary-color) 10%, transparent);
+      }
+      .low-speed-hint span {
+        flex: 1 1 240px;
+      }
+      .low-speed-hint ha-icon {
+        --mdc-icon-size: 18px;
+        color: var(--primary-color);
       }
       .low-tag {
         --mdc-icon-size: 16px;
@@ -2054,8 +2091,7 @@ class ViewCovers extends i$2 {
     }
     // -------------------------------------------------------------- rendering
     _renderControlGroup(cover) {
-        const low = cover.manual_low_mode &&
-            Boolean(cover.low_mode_entity_id || cover.low_mode_script_id);
+        const low = cover.manual_low_mode && hasLowMode(cover);
         return b `
       <div class="icon-group" @click=${(e) => e.stopPropagation()}>
         ${low
@@ -2285,7 +2321,7 @@ class ViewCovers extends i$2 {
           <button class="btn-danger" @click=${() => this._delete(cover)}>
             ${t(this.hass, "config_panel.covers_delete")}
           </button>
-          ${cover.low_mode_entity_id || cover.low_mode_script_id
+          ${hasLowMode(cover)
             ? b `<label class="manual-low">
                 <ha-switch
                   .checked=${cover.manual_low_mode}
@@ -2418,6 +2454,54 @@ class ViewCovers extends i$2 {
       </button>
     `;
     }
+    /** Low mode "speed option": switch, plus hints for unsupported entities
+        and for deprecated Overkiz `*_low_speed` entities. */
+    _renderLowSpeedOption(draft, caps) {
+        const slow = Boolean(caps?.supports_slow_speed);
+        if (!slow && !draft.low_mode_speed)
+            return A;
+        const migrate = slow &&
+            !draft.low_mode_speed &&
+            looksLikeDeprecatedLowSpeedEntity(draft.low_mode_entity_id);
+        // The speed option replaces the low entity and script; clearing them
+        // keeps the stored config free of the deprecated entity.
+        const enableSpeed = () => this._patchDraft({
+            low_mode_speed: true,
+            low_mode_entity_id: null,
+            low_mode_script_id: null,
+        });
+        return b `
+      ${migrate
+            ? b `<div class="low-speed-hint">
+            <ha-icon icon="mdi:information-outline"></ha-icon>
+            <span>${t(this.hass, "config_panel.covers_low_speed_migrate")}</span>
+            <button type="button" class="btn-outline" @click=${enableSpeed}>
+              ${t(this.hass, "config_panel.covers_low_speed_migrate_button")}
+            </button>
+          </div>`
+            : A}
+      <label class="manual-low dialog-row">
+        <ha-switch
+          .checked=${draft.low_mode_speed}
+          @click=${() => this._draft?.low_mode_speed
+            ? this._patchDraft({ low_mode_speed: false })
+            : enableSpeed()}
+        ></ha-switch>
+        <ha-icon icon="mdi:speedometer-slow"></ha-icon>
+        <span>
+          ${t(this.hass, "config_panel.covers_low_speed")}
+          <span class="section-desc" style="display:block;margin:0">
+            ${t(this.hass, "config_panel.covers_low_speed_desc")}
+          </span>
+        </span>
+      </label>
+      ${draft.low_mode_speed && caps && !slow
+            ? b `<p class="warning">
+            ${t(this.hass, "config_panel.covers_low_speed_unsupported")}
+          </p>`
+            : A}
+    `;
+    }
     _renderDialog() {
         const draft = this._draft;
         if (!draft)
@@ -2497,6 +2581,12 @@ class ViewCovers extends i$2 {
                     ></ha-icon>
                     ${t(this.hass, "config_panel.covers_cap_tilt")}
                   </span>
+                  ${caps.supports_slow_speed
+                ? b `<span class="chip readonly">
+                        <ha-icon icon="mdi:check-circle"></ha-icon>
+                        ${t(this.hass, "config_panel.covers_cap_slow_speed")}
+                      </span>`
+                : A}
                   ${!caps.available
                 ? b `<span class="chip readonly">
                         <ha-icon icon="mdi:alert-outline"></ha-icon>
@@ -2534,15 +2624,18 @@ class ViewCovers extends i$2 {
             </div>
             <p class="section-desc">${t(this.hass, "config_panel.covers_low_mode_desc")}</p>
             ${renderHelp(this.hass, "low_mode")}
-            <div class="row">
-              <div class="grow">
-                ${renderEntityField(this.hass, ["cover"], t(this.hass, "config_panel.covers_field_low_entity"), draft.low_mode_entity_id ?? "", (v) => this._patchDraft({ low_mode_entity_id: v || null }))}
-              </div>
-              <div class="grow">
-                ${renderEntityField(this.hass, ["script"], t(this.hass, "config_panel.covers_field_low_script"), draft.low_mode_script_id ?? "", (v) => this._patchDraft({ low_mode_script_id: v || null }))}
-              </div>
-            </div>
-            ${draft.low_mode_entity_id || draft.low_mode_script_id
+            ${this._renderLowSpeedOption(draft, caps)}
+            ${!draft.low_mode_speed
+            ? b `<div class="row">
+                  <div class="grow">
+                    ${renderEntityField(this.hass, ["cover"], t(this.hass, "config_panel.covers_field_low_entity"), draft.low_mode_entity_id ?? "", (v) => this._patchDraft({ low_mode_entity_id: v || null }))}
+                  </div>
+                  <div class="grow">
+                    ${renderEntityField(this.hass, ["script"], t(this.hass, "config_panel.covers_field_low_script"), draft.low_mode_script_id ?? "", (v) => this._patchDraft({ low_mode_script_id: v || null }))}
+                  </div>
+                </div>`
+            : A}
+            ${hasLowMode(draft)
             ? b `<label class="manual-low dialog-row">
                   <ha-switch
                     .checked=${draft.manual_low_mode}
@@ -7337,7 +7430,7 @@ class ViewToday extends i$2 {
 }
 defineCustomElementOnce("ac-view-today", ViewToday);
 
-const VERSION = "0.10.0";
+const VERSION = "0.11.0";
 const PANEL_PAGES = ["today", "covers", "scenarios", "log"];
 const TAB_LABEL_KEYS = {
     today: "config_panel.tab_today",

@@ -177,7 +177,7 @@
     "covers_cap_tilt": "Tilt",
     "covers_cap_unavailable": "Entity unavailable",
     "covers_low_mode_title": "Low / discreet mode (optional)",
-    "covers_low_mode_desc": "Alternative entity or script used when a scenario action has mode \"low\" (e.g. a second, slower cover entity). The script receives the target position as variable \"position\".",
+    "covers_low_mode_desc": "Low mode is used when a scenario action has the mode \"low\". It can move the normal cover entity at its slow speed, use a second, slower cover entity, or run a script. The script receives the target position as the variable \"position\".",
     "covers_contact_title": "Window contact (optional)",
     "covers_contact_desc": "Binary sensor or multi-state handle sensor. The picker suggests sensors, but any entity can be chosen — its state is only read and mapped below. Enables the contact condition and the safety rule.",
     "covers_contact_map_title": "Sensor state mapping",
@@ -369,7 +369,7 @@
     "help_today_statuses_title": "What do the statuses mean?",
     "help_today_statuses_body": "Planned: the trigger time is still ahead. Executed: the cover was moved. Skipped: conditions were not met or the move was unnecessary (see reason). Waiting: conditions failed at trigger time — the scenario keeps watching the failing entities until its re-arm window ends. Expired: the window ended without success. Blocked: the safety rule prevented closing because the window is open. Unavailable: a required entity was missing — for safety, nothing was moved.",
     "help_low_mode_title": "What if no low-mode target is configured?",
-    "help_low_mode_body": "Low mode is an optional alternative drive path (e.g. a slower, quieter motor profile). If a scenario uses mode “Low” but this cover has neither a low-mode entity nor a script, the action simply runs on the normal cover entity — it never fails because of this. If both are configured, the script takes precedence and receives the target position as the variable “position”.",
+    "help_low_mode_body": "Low mode is an optional alternative way to drive the cover, for example a slower and quieter motor profile. If a scenario uses the mode “Low” but this cover has no low mode configured, the action simply runs on the normal cover entity, so it never fails because of this. The slow speed of the cover entity takes precedence over a low-mode entity or script. If both an entity and a script are configured, the script takes precedence and receives the target position as the variable “position”.",
     "help_contact_map_title": "How does the state mapping work?",
     "help_contact_map_body": "Internally the integration only knows closed / tilted / open. Every raw sensor state is translated through this table. Unmapped states count as “unknown”: contact conditions then fail and the safety rule stays inactive (fail-safe — never move “just in case”). For standard binary sensors, off → closed and on → open is prefilled.",
     "help_safety_title": "When exactly does the safety rule kick in?",
@@ -492,7 +492,14 @@
     "reason_safety_delay_ignore": "Window open — waits until {time} for the window to be shut, then closes fully",
     "reason_superseded": "Replaced by the later scenario “{scenario}”",
     "covers_manual_low": "Low mode for manual control",
-    "covers_manual_low_desc": "The arrow buttons and the test slider drive the low-speed entity/script instead of the normal cover entity. Stop always uses the normal entity.",
-    "covers_manual_low_active": "Manual control uses low mode"
+    "covers_manual_low_desc": "The arrow buttons and the test slider use low mode instead of the normal speed. Stop always goes to the normal cover entity without a speed.",
+    "covers_manual_low_active": "Manual control uses low mode",
+    "covers_cap_slow_speed": "Slow speed",
+    "covers_low_speed": "Use the slow speed of the cover entity",
+    "covers_low_speed_desc": "Low mode moves the normal cover entity with the speed “slow”. No separate low-mode entity or script is needed then. This needs Home Assistant 2026.11 or newer and an integration that offers a slow speed, such as Overkiz.",
+    "covers_low_speed_unsupported": "This cover entity does not offer a slow speed right now. Low mode then moves the cover at normal speed.",
+    "covers_low_speed_migrate": "This cover entity now offers a slow speed itself. Separate low-speed entities from Overkiz are deprecated and stop working in Home Assistant 2027.5. Switch to the slow speed of the cover entity instead.",
+    "covers_low_speed_migrate_button": "Switch to the slow speed",
+    "reason_slow_speed_fallback": "{entity} does not offer a slow speed, so the cover moved at normal speed."
   }
 }

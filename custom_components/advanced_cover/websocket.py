@@ -30,14 +30,18 @@ from .capabilities import (
     default_kind_for_state,
     get_cover_capabilities,
     resolve_contact_state,
+    supports_slow_speed,
 )
 from .const import (
+    ATTR_SPEED,
     CONTACT_OPEN,
     CONTACT_TILTED,
     DOMAIN,
+    LOW_MODE_SPEED,
     SAFETY_MODE_CLAMP,
     SAFETY_MODE_IGNORE,
     SCRIPT_DOMAIN,
+    SPEED_SLOW,
     SUBSCRIBERS_KEY,
     SUN_ENTITY_ID,
 )
@@ -741,16 +745,19 @@ async def async_drive_cover(
     position: int | None = None,
     *,
     context: Context | None = None,
-) -> None:
+) -> str | None:
     """Drive a cover directly (panel test buttons, dashboard card controls).
 
     Manual low mode: open, close and position drive the low-speed entity (or
-    script) instead of the normal cover entity. Stop always goes to the normal
-    entity: a script cannot stop a running move, and the panel promises one
-    rule for both kinds of low mode.
+    script) instead of the normal cover entity, or send ``speed: slow`` to the
+    normal entity in speed mode. Stop always goes to the normal entity without
+    a speed: a script cannot stop a running move, and the panel promises one
+    rule for every kind of low mode.
 
     ``context`` carries the calling user, so Home Assistant applies that
     user's entity permissions and the logbook names who moved the cover.
+
+    Returns a note when the move fell back to normal speed, else ``None``.
     """
     service_map = {
         "open": SERVICE_OPEN_COVER,
@@ -758,11 +765,25 @@ async def async_drive_cover(
         "stop": SERVICE_STOP_COVER,
     }
     entity_id = cover.cover_entity_id
-    if command == "stop":
+    extra: dict[str, Any] = {}
+    note: str | None = None
+    if command == "stop" or not cover.manual_low_mode:
         pass
-    elif cover.manual_low_mode and cover.low_mode_entity_id:
+    elif cover.low_mode_kind == LOW_MODE_SPEED:
+        if supports_slow_speed(hass.states.get(entity_id)):
+            extra[ATTR_SPEED] = SPEED_SLOW
+        else:
+            note = f"{entity_id} does not support the slow speed, moved at normal speed"
+            _LOGGER.warning(
+                "Manual low mode for %s: %s does not support speed %r, "
+                "moving at normal speed",
+                cover.name,
+                entity_id,
+                SPEED_SLOW,
+            )
+    elif cover.low_mode_entity_id:
         entity_id = cover.low_mode_entity_id
-    elif cover.manual_low_mode and cover.low_mode_script_id:
+    elif cover.low_mode_script_id:
         target = {"open": 100, "close": 0}.get(
             command, 50 if position is None else position
         )
@@ -773,7 +794,7 @@ async def async_drive_cover(
             blocking=True,
             context=context,
         )
-        return
+        return None
     if command == "position":
         await hass.services.async_call(
             COVER_DOMAIN,
@@ -781,18 +802,20 @@ async def async_drive_cover(
             {
                 ATTR_ENTITY_ID: entity_id,
                 ATTR_POSITION: 50 if position is None else position,
+                **extra,
             },
             blocking=True,
             context=context,
         )
-        return
+        return note
     await hass.services.async_call(
         COVER_DOMAIN,
         service_map[command],
-        {ATTR_ENTITY_ID: entity_id},
+        {ATTR_ENTITY_ID: entity_id, **extra},
         blocking=True,
         context=context,
     )
+    return note
 
 
 @websocket_api.websocket_command(
@@ -819,14 +842,17 @@ async def ws_cover_test(
     if cover is None:
         connection.send_error(msg["id"], ERR_NOT_FOUND, "Unknown cover item")
         return
-    await async_drive_cover(
+    note = await async_drive_cover(
         hass,
         cover,
         msg["command"],
         msg.get("position"),
         context=connection.context(msg),
     )
-    connection.send_result(msg["id"], {"success": True})
+    result: dict[str, Any] = {"success": True}
+    if note:
+        result["note"] = note
+    connection.send_result(msg["id"], result)
 
 
 @websocket_api.websocket_command(

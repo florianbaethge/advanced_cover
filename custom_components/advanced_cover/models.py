@@ -29,6 +29,9 @@ from .const import (
     DEFAULT_VENTILATION_POSITION,
     KIND_OTHER,
     KINDS,
+    LOW_MODE_ENTITY,
+    LOW_MODE_SCRIPT,
+    LOW_MODE_SPEED,
     MAX_RANDOM_WINDOW_MIN,
     MAX_RETRY_WINDOW_MIN,
     MAX_SAFETY_DELAY_MIN,
@@ -615,6 +618,9 @@ class CoverItem:
     azimuth: int | None = None
     low_mode_entity_id: str | None = None
     low_mode_script_id: str | None = None
+    # Low mode drives the normal cover entity with ``speed: slow`` (HA
+    # 2026.11+ cover speed). Takes precedence over the low entity/script.
+    low_mode_speed: bool = False
     # Manual panel controls (test buttons/slider) drive the low-mode
     # entity/script instead of the normal cover entity.
     manual_low_mode: bool = False
@@ -622,6 +628,17 @@ class CoverItem:
     contact_state_map: dict[str, str] = field(default_factory=dict)
     safety: SafetyConfig = field(default_factory=SafetyConfig)
     enabled: bool = True
+
+    @property
+    def low_mode_kind(self) -> str | None:
+        """How low mode is driven: "speed", "script", "entity" or ``None``."""
+        if self.low_mode_speed:
+            return LOW_MODE_SPEED
+        if self.low_mode_script_id:
+            return LOW_MODE_SCRIPT
+        if self.low_mode_entity_id:
+            return LOW_MODE_ENTITY
+        return None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to JSON-compatible dict."""
@@ -634,6 +651,7 @@ class CoverItem:
             "azimuth": self.azimuth,
             "low_mode_entity_id": self.low_mode_entity_id,
             "low_mode_script_id": self.low_mode_script_id,
+            "low_mode_speed": self.low_mode_speed,
             "manual_low_mode": self.manual_low_mode,
             "contact_entity_id": self.contact_entity_id,
             "contact_state_map": dict(self.contact_state_map),
@@ -655,6 +673,7 @@ class CoverItem:
             azimuth=_clamp_opt(data.get("azimuth"), 0, 359),
             low_mode_entity_id=_str_or_none(data.get("low_mode_entity_id")),
             low_mode_script_id=_str_or_none(data.get("low_mode_script_id")),
+            low_mode_speed=bool(data.get("low_mode_speed", False)),
             manual_low_mode=bool(data.get("manual_low_mode", False)),
             contact_entity_id=_str_or_none(data.get("contact_entity_id")),
             contact_state_map=contact_map,

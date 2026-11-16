@@ -177,7 +177,7 @@
     "covers_cap_tilt": "Lamellen",
     "covers_cap_unavailable": "Entität nicht verfügbar",
     "covers_low_mode_title": "Low-/Diskret-Modus (optional)",
-    "covers_low_mode_desc": "Alternative Entität oder Script für Aktionen mit Modus „Low“ (z. B. eine zweite, langsamere Cover-Entität). Das Script erhält die Zielposition als Variable „position“.",
+    "covers_low_mode_desc": "Der Low-Modus gilt für Aktionen mit dem Modus „Low“. Er kann die normale Cover-Entität mit ihrer langsamen Geschwindigkeit fahren, eine zweite, langsamere Cover-Entität nutzen oder ein Script ausführen. Das Script erhält die Zielposition als Variable „position“.",
     "covers_contact_title": "Fensterkontakt (optional)",
     "covers_contact_desc": "Binärsensor oder Drehgriff-Sensor mit mehreren Zuständen. Die Auswahl schlägt Sensoren vor, es lässt sich aber jede Entität wählen — ihr Zustand wird nur gelesen und unten zugeordnet. Schaltet die Kontakt-Bedingung und die Sicherheitsregel frei.",
     "covers_contact_map_title": "Zuordnung der Sensorzustände",
@@ -369,7 +369,7 @@
     "help_today_statuses_title": "Was bedeuten die Status?",
     "help_today_statuses_body": "Geplant: Die Triggerzeit liegt noch vor uns. Ausgeführt: Das Cover wurde gefahren. Übersprungen: Bedingungen nicht erfüllt oder Fahrt unnötig (siehe Grund). Wartet: Bedingungen waren zur Triggerzeit nicht erfüllt — das Szenario beobachtet die fehlgeschlagenen Entitäten, bis das Re-Arm-Fenster endet. Abgelaufen: Das Fenster endete ohne Erfolg. Blockiert: Die Sicherheitsregel hat das Schließen verhindert, weil das Fenster offen ist. Nicht verfügbar: Eine benötigte Entität fehlte — sicherheitshalber wurde nichts gefahren.",
     "help_low_mode_title": "Was passiert ohne Low-Modus-Ziel?",
-    "help_low_mode_body": "Der Low-Modus ist ein optionaler alternativer Fahrweg (z. B. ein langsameres, leiseres Motorprofil). Nutzt ein Szenario den Modus „Low“, aber dieses Cover hat weder Low-Entität noch Script, läuft die Aktion einfach über die normale Cover-Entität — sie schlägt deswegen nie fehl. Sind beide konfiguriert, hat das Script Vorrang und erhält die Zielposition als Variable „position“.",
+    "help_low_mode_body": "Der Low-Modus ist ein optionaler alternativer Fahrweg, zum Beispiel ein langsameres und leiseres Motorprofil. Nutzt ein Szenario den Modus „Low“, aber für dieses Cover ist kein Low-Modus eingerichtet, läuft die Aktion einfach über die normale Cover-Entität. Sie schlägt deswegen nie fehl. Die langsame Geschwindigkeit der Cover-Entität hat Vorrang vor Low-Entität und Script. Sind Entität und Script beide konfiguriert, hat das Script Vorrang und erhält die Zielposition als Variable „position“.",
     "help_contact_map_title": "Wie funktioniert die Zustands-Zuordnung?",
     "help_contact_map_body": "Intern kennt die Integration nur geschlossen / gekippt / offen. Jeder rohe Sensorzustand wird über diese Tabelle übersetzt. Nicht zugeordnete Zustände gelten als „unbekannt“: Kontakt-Bedingungen schlagen dann fehl und die Sicherheitsregel bleibt inaktiv (fail-safe — nie „im Zweifel fahren“). Bei Standard-Binärsensoren ist off → geschlossen und on → offen vorbelegt.",
     "help_safety_title": "Wann genau greift die Sicherheitsregel?",
@@ -496,7 +496,7 @@
     "reason_cover_off": "Die Automatik ist für dieses Cover deaktiviert",
     "reason_removed": "Das Cover oder Szenario wurde aus der Konfiguration entfernt",
     "covers_manual_low": "Low-Modus für manuelle Steuerung",
-    "covers_manual_low_desc": "Die Pfeil-Buttons und der Test-Schieberegler steuern die Low-Speed-Entität/das Skript statt der normalen Cover-Entität. Stopp nutzt immer die normale Entität.",
+    "covers_manual_low_desc": "Die Pfeil-Buttons und der Test-Schieberegler nutzen den Low-Modus statt der normalen Geschwindigkeit. Stopp geht immer ohne Geschwindigkeit an die normale Cover-Entität.",
     "covers_manual_low_active": "Manuelle Steuerung nutzt den Low-Modus",
     "card_state_active": "Aktiv",
     "card_state_off": "Aus",
@@ -593,6 +593,13 @@
     "card_ed_entry_gone": "{id} (existiert nicht mehr)",
     "card_cover_auto": "Automatik für {name}",
     "card_ed_cover_auto": "Automatik je Rollo schaltbar",
-    "card_tomorrow": "Morgen {time} · {name}"
+    "card_tomorrow": "Morgen {time} · {name}",
+    "covers_cap_slow_speed": "Langsame Geschwindigkeit",
+    "covers_low_speed": "Langsame Geschwindigkeit der Cover-Entität nutzen",
+    "covers_low_speed_desc": "Der Low-Modus fährt die normale Cover-Entität mit der Geschwindigkeit „slow“. Eine eigene Low-Entität oder ein Script braucht es dann nicht. Das setzt Home Assistant 2026.11 oder neuer und eine Integration mit langsamer Geschwindigkeit voraus, zum Beispiel Overkiz.",
+    "covers_low_speed_unsupported": "Diese Cover-Entität bietet gerade keine langsame Geschwindigkeit an. Der Low-Modus fährt das Cover dann mit normaler Geschwindigkeit.",
+    "covers_low_speed_migrate": "Diese Cover-Entität bietet jetzt selbst eine langsame Geschwindigkeit an. Die eigenen Low-Speed-Entitäten von Overkiz sind veraltet und funktionieren ab Home Assistant 2027.5 nicht mehr. Wechsle stattdessen zur langsamen Geschwindigkeit der Cover-Entität.",
+    "covers_low_speed_migrate_button": "Zur langsamen Geschwindigkeit wechseln",
+    "reason_slow_speed_fallback": "{entity} bietet keine langsame Geschwindigkeit an, deshalb fuhr das Cover mit normaler Geschwindigkeit."
   }
 }
